@@ -113,7 +113,7 @@ const UploadScreen = () => {
     }
 
     try {
-      const response = await fetch("http://localhost:5000/api/contracts/upload", {
+      const response = await fetch("http://localhost:5001/api/contracts/upload", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
