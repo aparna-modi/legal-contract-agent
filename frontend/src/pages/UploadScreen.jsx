@@ -201,9 +201,9 @@ const UploadScreen = () => {
             {file ? (
               <div className="file-preview-card">
                 <span className="file-preview-icon">
-                  {file.name.endsWith(".pdf")
+                  {file.name.toLowerCase().endsWith(".pdf")
                     ? "📕"
-                    : file.name.endsWith(".docx")
+                    : file.name.toLowerCase().endsWith(".docx")
                     ? "📘"
                     : "📄"}
                 </span>
