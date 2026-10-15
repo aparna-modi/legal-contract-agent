@@ -210,6 +210,8 @@ router.post("/:id/extract", protect, async (req, res) => {
     // 1. Idempotently clear previous clauses for this document
     await ClauseModel.deleteMany({ document: contract._id });
 
+    const chunks = extractionResult.chunks || [];
+
     // 2. Persist parsed and classified clauses into MongoDB Clause collection
     let clausesToInsert = [];
     if (extractionResult.classified_clauses && extractionResult.classified_clauses.length > 0) {
@@ -221,7 +223,6 @@ router.post("/:id/extract", protect, async (req, res) => {
         riskReason: c.risk_reason || "Standard contractual provision",
       }));
     } else {
-      const chunks = extractionResult.chunks || [];
       clausesToInsert = chunks
         .filter((chunk) => chunk.text && chunk.text.trim().length > 30)
         .map((chunk) => {
