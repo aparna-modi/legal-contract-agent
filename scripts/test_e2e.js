@@ -1,11 +1,14 @@
 const fs = require("fs");
 const path = require("path");
+const { spawn } = require("child_process");
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:5000";
 const AI_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
 
 let testsPassed = 0;
 let testsFailed = 0;
+let spawnedAiProc = null;
+let spawnedBackendProc = null;
 
 function assert(condition, message) {
   if (!condition) {
@@ -18,13 +21,105 @@ function assert(condition, message) {
   }
 }
 
+async function isServerRunning(url) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(1500) });
+    return res.status >= 200 && res.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForServer(url, timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await isServerRunning(url)) return true;
+    await new Promise((r) => setTimeout(r, 600));
+  }
+  return false;
+}
+
+async function ensureServicesRunning() {
+  console.log(">> Checking service readiness for End-to-End verification...");
+
+  // 1. AI Service check / auto-spawn
+  const aiRunning = await isServerRunning(`${AI_URL}/health`);
+  if (!aiRunning) {
+    console.log("   -> AI Microservice not detected on port 8000. Auto-spawning background instance...");
+    const aiServiceDir = path.join(__dirname, "../ai-service");
+    spawnedAiProc = spawn("uv", ["run", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"], {
+      cwd: aiServiceDir,
+      stdio: "pipe",
+    });
+
+    const ready = await waitForServer(`${AI_URL}/health`);
+    if (!ready) {
+      throw new Error(`AI Service failed to start within timeout on ${AI_URL}. Ensure uv and dependencies are installed.`);
+    }
+    console.log("   -> AI Service successfully booted and healthy!");
+  } else {
+    console.log("   ✓ AI Service detected running on port 8000.");
+  }
+
+  // 2. Backend check / auto-spawn
+  const backendRunning = await isServerRunning(`${BACKEND_URL}/api/contracts`);
+  if (!backendRunning) {
+    console.log("   -> Backend Gateway not detected on port 5000. Auto-spawning background instance...");
+    const rootDir = path.join(__dirname, "..");
+    spawnedBackendProc = spawn(process.execPath, [path.join(rootDir, "backend/server.js")], {
+      cwd: rootDir,
+      stdio: "pipe",
+    });
+
+    const ready = await waitForServer(`${BACKEND_URL}/api/contracts`);
+    if (!ready) {
+      throw new Error(`Backend Gateway failed to start within timeout on ${BACKEND_URL}. Check MongoDB connection.`);
+    }
+    console.log("   -> Backend Gateway successfully booted on port 5000!");
+  } else {
+    console.log("   ✓ Backend Gateway detected running on port 5000.");
+  }
+}
+
+function cleanupSpawnedProcesses() {
+  if (spawnedAiProc && spawnedAiProc.pid) {
+    try {
+      if (process.platform === "win32") {
+        require("child_process").execSync(`taskkill /pid ${spawnedAiProc.pid} /f /t`, { stdio: "ignore" });
+      } else {
+        spawnedAiProc.kill();
+      }
+    } catch {}
+    spawnedAiProc = null;
+  }
+  if (spawnedBackendProc && spawnedBackendProc.pid) {
+    try {
+      if (process.platform === "win32") {
+        require("child_process").execSync(`taskkill /pid ${spawnedBackendProc.pid} /f /t`, { stdio: "ignore" });
+      } else {
+        spawnedBackendProc.kill();
+      }
+    } catch {}
+    spawnedBackendProc = null;
+  }
+}
+
+process.on("exit", cleanupSpawnedProcesses);
+process.on("SIGINT", () => {
+  cleanupSpawnedProcesses();
+  process.exit(1);
+});
+
+
 async function runTests() {
   console.log("==================================================");
   console.log("   LEGAL CONTRACT AGENT — END-TO-END TEST SUITE   ");
   console.log("==================================================\n");
 
-  // TEST 1: AI Service Health Check
-  console.log("--- 1. Testing AI Service (/health) ---");
+  await ensureServicesRunning();
+
+  // TEST 1: AI Service Health Check & Vector Store Readiness
+  console.log("\n--- 1. Testing AI Service Telemetry (/health) ---");
   const healthRes = await fetch(`${AI_URL}/health`);
   assert(healthRes.status === 200, "AI Service /health responds with HTTP 200");
   const healthData = await healthRes.json();
@@ -35,7 +130,9 @@ async function runTests() {
   assert(healthData.extractors_ready?.docx === true, "DOCX extractor is ready");
   assert(healthData.extractors_ready?.txt === true, "TXT extractor is ready");
   assert(healthData.embeddings_ready === true, "Embeddings engine is ready");
+  assert(healthData.vector_store_ready === true, "ChromaDB vector store is ready");
   console.log(`   -> Active Embedding Provider: ${healthData.embedding_provider}`);
+  console.log(`   -> Vector Store Provider: ${healthData.vector_store?.provider}`);
 
   // TEST 2: Standalone Embedding Generation & Semantic Similarity
   console.log("\n--- 2. Testing AI Service Embeddings & Cosine Similarity ---");
@@ -178,22 +275,20 @@ This Agreement is governed by the laws of California.`;
     "Uploaded contract is present in user's repository"
   );
 
-  // TEST 8: Full End-to-End AI Extraction and Clause Persistence through Gateway
-  console.log("\n--- 8. Testing AI Extraction & Clause Persistence via Gateway (/api/contracts/:id/extract) ---");
+  // TEST 8: Full End-to-End AI Extraction and Clause Persistence through Gateway + ChromaDB Indexing
+  console.log("\n--- 8. Testing AI Extraction, Clause Persistence & Vector Indexing (/api/contracts/:id/extract) ---");
   const extractGatewayRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/extract`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
   const extractGatewayText = await extractGatewayRes.text();
-  if (extractGatewayRes.status !== 200) {
-    console.error("Gateway error details:", extractGatewayRes.status, extractGatewayText);
-  }
   assert(extractGatewayRes.status === 200, "Contract AI extraction via gateway responds with HTTP 200 OK");
   const extractGatewayData = JSON.parse(extractGatewayText);
   assert(extractGatewayData.savedClausesCount >= 3, "Gateway saved at least 3 clauses in MongoDB");
+  assert(extractGatewayData.vectorsIndexedCount >= 3, "Vectors successfully indexed into ChromaDB");
   assert(extractGatewayData.document?.status === "completed", "Document status updated to 'completed'");
-  assert(extractGatewayData.document?.totalTokens > 0, "Document records computed token metrics");
-  assert(extractGatewayData.extraction?.has_embeddings === true, "Chunks include vector embeddings");
+  assert(extractGatewayData.document?.vectorIndexed === true, "Document record flags vectorIndexed = true");
+  assert(extractGatewayData.document?.vectorCount >= 3, "Document records vectorCount in MongoDB");
 
   // TEST 9: Retrieve Saved Clauses from MongoDB Collection
   console.log("\n--- 9. Testing Retrieve Extracted Clauses from MongoDB (/api/contracts/:id/clauses) ---");
@@ -205,11 +300,8 @@ This Agreement is governed by the laws of California.`;
   assert(Array.isArray(clausesData.clauses), "Clauses list returned");
   assert(clausesData.count >= 3, "At least 3 clauses retrieved from MongoDB");
   console.log(`   -> Extracted & Persisted Clauses Count: ${clausesData.count}`);
-  clausesData.clauses.slice(0, 3).forEach((cl, idx) => {
-    console.log(`      [Clause ${idx + 1}] Type: "${cl.clauseType}" | Text: "${cl.text.substring(0, 50)}..."`);
-  });
 
-  // TEST 10: Retrieve Contract Summary Metrics
+  // TEST 10: Contract Summary Metrics
   console.log("\n--- 10. Testing Contract Summary Metrics (/api/contracts/:id/summary) ---");
   const summaryRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/summary`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -218,10 +310,80 @@ This Agreement is governed by the laws of California.`;
   const summaryData = await summaryRes.json();
   assert(summaryData.metrics?.status === "completed", "Summary reports 'completed' status");
   assert(summaryData.metrics?.clauseCount >= 3, "Summary reports clause count");
-  assert(summaryData.metrics?.totalTokens > 0, "Summary reports token count");
+  assert(summaryData.metrics?.vectorIndexed === true, "Summary confirms vector indexing");
 
-  // TEST 11: Delete Contract and Cascade Delete Clauses
-  console.log("\n--- 11. Testing Contract Deletion & Cascade Clause Cleanup (/api/contracts/:id) ---");
+  // TEST 11: Week 5 Vector Telemetry Stats Endpoint
+  console.log("\n--- 11. Testing Vector Store Telemetry (/api/contracts/stats/vectors) ---");
+  const vectorStatsRes = await fetch(`${BACKEND_URL}/api/contracts/stats/vectors`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(vectorStatsRes.status === 200, "Vector stats endpoint responds with HTTP 200 OK");
+  const vectorStats = await vectorStatsRes.json();
+  assert(vectorStats.user_vectors >= 3, "User vectors registered in ChromaDB collection");
+  console.log(`   -> User Vector Count in ChromaDB: ${vectorStats.user_vectors}`);
+
+  // TEST 12: Week 5 Grounded Contract Q&A with Citations (/api/contracts/:id/ask)
+  console.log("\n--- 12. Testing Grounded Contract Q&A via Retrieval Pipeline (/api/contracts/:id/ask) ---");
+  const askRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/ask`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query: "What are the indemnification terms and attorney fees conditions?",
+      top_k: 3,
+      min_score: 0.20,
+    }),
+  });
+  assert(askRes.status === 200, "Contract Q&A endpoint responds with HTTP 200 OK");
+  const askData = await askRes.json();
+  assert(askData.insufficient_information === false, "Indemnity query found sufficient grounded evidence");
+  assert(askData.results?.length > 0, "Retrieved candidate passages");
+  assert(askData.citations?.length > 0, "Generated structured page/section citations");
+  assert(askData.answer.length > 0, "Returned grounded synthesis answer");
+  console.log(`   -> Top Citation: ${askData.citations[0]}`);
+  console.log(`   -> Answer Excerpt: ${askData.answer.substring(0, 90)}...`);
+
+  // TEST 13: Week 5 Hallucination Defense Triggering
+  console.log("\n--- 13. Testing Hallucination Defense Fallback (/api/contracts/:id/ask) ---");
+  const fakeRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/ask`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query: "What are the reimbursement policies for interstellar rocket fuel?",
+      top_k: 3,
+      min_score: 0.35,
+    }),
+  });
+  assert(fakeRes.status === 200, "Unrelated question handled gracefully with HTTP 200");
+  const fakeData = await fakeRes.json();
+  assert(fakeData.insufficient_information === true, "Hallucination defense flagged insufficient_information = true");
+  assert(fakeData.message.includes("Insufficient information"), "Refusal explanation returned");
+
+  // TEST 14: Week 5 Library-Wide Cross-Contract Semantic Search (/api/contracts/search)
+  console.log("\n--- 14. Testing Cross-Contract Library Search (/api/contracts/search) ---");
+  const searchRes = await fetch(`${BACKEND_URL}/api/contracts/search`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query: "California governing law",
+      top_k: 2,
+    }),
+  });
+  assert(searchRes.status === 200, "Cross-contract search responds with HTTP 200 OK");
+  const searchData = await searchRes.json();
+  assert(searchData.results?.length > 0, "Cross-contract search returned matching clauses");
+  assert(searchData.results[0].contractTitle === "E2E Master Services Agreement", "Results enriched with contract title");
+
+  // TEST 15: Delete Contract and Cascade Delete from Disk, Mongo, and ChromaDB
+  console.log("\n--- 15. Testing Contract Deletion & ChromaDB Vector Purge (/api/contracts/:id) ---");
   const deleteRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
@@ -246,12 +408,13 @@ This Agreement is governed by the laws of California.`;
   console.log(`   ALL TESTS COMPLETED: ${testsPassed} PASSED, ${testsFailed} FAILED   `);
   console.log("==================================================");
 
-  if (testsFailed > 0) {
-    process.exit(1);
-  }
+  cleanupSpawnedProcesses();
+  process.exit(testsFailed > 0 ? 1 : 0);
 }
 
 runTests().catch((err) => {
   console.error("Test execution threw an unhandled error:", err);
+  cleanupSpawnedProcesses();
   process.exit(1);
 });
+

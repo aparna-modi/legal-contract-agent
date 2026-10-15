@@ -33,7 +33,6 @@ const Dashboard = () => {
 
   // Top library search query
   const [libraryQuery, setLibraryQuery] = useState("");
-  const [searchingLibrary, setSearchingLibrary] = useState(false);
 
   const fetchVectorStats = useCallback(() => {
     if (!token) return;
