@@ -1020,7 +1020,7 @@ body {
   font-family: var(--font-main);
 }
 
-/* --- Week 5 Grounded Q&A and Vector Search Styles --- */
+/* --- Document Intelligence & Semantic Search Styles --- */
 .qa-search-bar-container {
   margin-bottom: 24px;
   background: var(--bg-card);

@@ -116,4 +116,4 @@ def test_insufficient_information_hallucination_defense(test_retrieval_service):
 
     assert res["insufficient_information"] is True
     assert "Insufficient information" in res["message"]
-    assert "avoided hallucination" in res["answer"]
+    assert "insufficient evidence" in res["answer"].lower()

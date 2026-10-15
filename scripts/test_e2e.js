@@ -312,7 +312,7 @@ This Agreement is governed by the laws of California.`;
   assert(summaryData.metrics?.clauseCount >= 3, "Summary reports clause count");
   assert(summaryData.metrics?.vectorIndexed === true, "Summary confirms vector indexing");
 
-  // TEST 11: Week 5 Vector Telemetry Stats Endpoint
+  // TEST 11: Vector Telemetry Stats Endpoint
   console.log("\n--- 11. Testing Vector Store Telemetry (/api/contracts/stats/vectors) ---");
   const vectorStatsRes = await fetch(`${BACKEND_URL}/api/contracts/stats/vectors`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -322,7 +322,7 @@ This Agreement is governed by the laws of California.`;
   assert(vectorStats.user_vectors >= 3, "User vectors registered in ChromaDB collection");
   console.log(`   -> User Vector Count in ChromaDB: ${vectorStats.user_vectors}`);
 
-  // TEST 12: Week 5 Grounded Contract Q&A with Citations (/api/contracts/:id/ask)
+  // TEST 12: Grounded Contract Q&A with Citations (/api/contracts/:id/ask)
   console.log("\n--- 12. Testing Grounded Contract Q&A via Retrieval Pipeline (/api/contracts/:id/ask) ---");
   const askRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/ask`, {
     method: "POST",
@@ -345,8 +345,8 @@ This Agreement is governed by the laws of California.`;
   console.log(`   -> Top Citation: ${askData.citations[0]}`);
   console.log(`   -> Answer Excerpt: ${askData.answer.substring(0, 90)}...`);
 
-  // TEST 13: Week 5 Hallucination Defense Triggering
-  console.log("\n--- 13. Testing Hallucination Defense Fallback (/api/contracts/:id/ask) ---");
+  // TEST 13: Confidence Verification & Rejection for Unrelated Queries
+  console.log("\n--- 13. Testing Low-Confidence Fallback Handling (/api/contracts/:id/ask) ---");
   const fakeRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/ask`, {
     method: "POST",
     headers: {
@@ -361,10 +361,10 @@ This Agreement is governed by the laws of California.`;
   });
   assert(fakeRes.status === 200, "Unrelated question handled gracefully with HTTP 200");
   const fakeData = await fakeRes.json();
-  assert(fakeData.insufficient_information === true, "Hallucination defense flagged insufficient_information = true");
+  assert(fakeData.insufficient_information === true, "Low-confidence query flagged insufficient_information = true");
   assert(fakeData.message.includes("Insufficient information"), "Refusal explanation returned");
 
-  // TEST 14: Week 5 Library-Wide Cross-Contract Semantic Search (/api/contracts/search)
+  // TEST 14: Library-Wide Cross-Contract Semantic Search (/api/contracts/search)
   console.log("\n--- 14. Testing Cross-Contract Library Search (/api/contracts/search) ---");
   const searchRes = await fetch(`${BACKEND_URL}/api/contracts/search`, {
     method: "POST",

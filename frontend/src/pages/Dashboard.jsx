@@ -339,7 +339,7 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* Metrics Bar with Week 5 Vector Telemetry */}
+      {/* Document & Vector Metrics */}
       <div className="metrics-grid">
         <div className="metric-card">
           <span className="metric-title">Total Contracts</span>
@@ -352,7 +352,7 @@ const Dashboard = () => {
           </span>
         </div>
         <div className="metric-card">
-          <span className="metric-title">ChromaDB Vectors</span>
+          <span className="metric-title">Indexed Vectors</span>
           <span className="metric-value" style={{ color: "#38bdf8" }}>
             {vectorStats?.user_vectors !== undefined
               ? vectorStats.user_vectors
@@ -361,7 +361,7 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* Week 5 Semantic Search Across Contracts */}
+      {/* Semantic Search Across Contracts */}
       <div className="qa-search-bar-container">
         <form onSubmit={handleTopSearchSubmit} className="qa-search-form">
           <div className="qa-search-input-wrapper">
@@ -509,7 +509,7 @@ const Dashboard = () => {
                         className="btn-qa"
                         title="Ask Questions and Retrieve Grounded Citations"
                       >
-                        🤖 Ask AI
+                        💬 Ask Assistant
                       </button>
                     </>
                   )}
@@ -528,7 +528,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* Week 5 Grounded Q&A & Evidence Retrieval Modal */}
+      {/* Grounded Q&A & Evidence Retrieval Modal */}
       {qaModal.open && (
         <div
           className="modal-backdrop"
@@ -538,11 +538,11 @@ const Dashboard = () => {
             <div className="modal-header">
               <div>
                 <h2>
-                  🤖 {qaModal.contract ? `Ask AI: ${qaModal.contract.title || qaModal.contract.fileName}` : "Contract Library Semantic Search"}
+                  💬 {qaModal.contract ? `Contract Assistant: ${qaModal.contract.title || qaModal.contract.fileName}` : "Contract Library Semantic Search"}
                 </h2>
                 <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginTop: "4px" }}>
                   {qaModal.contract
-                    ? "Grounded Q&A with hybrid reranking, page/section citations, and hallucination defense"
+                    ? "Source-grounded legal Q&A with hybrid reranking and section citations"
                     : "Cross-contract vector similarity search scoped strictly to your account"}
                 </p>
               </div>
@@ -588,7 +588,7 @@ const Dashboard = () => {
                   "Is there a limitation of liability clause?",
                   "Which jurisdiction governs disputes?",
                   "What are the payment deadlines?",
-                  "What is the spacecraft spaceflight policy?", // Hallucination defense test
+                  "What is the interstellar spaceflight policy?", // Out-of-scope query test
                 ].map((sampleQ) => (
                   <button
                     key={sampleQ}
@@ -607,18 +607,18 @@ const Dashboard = () => {
               {qaModal.loading ? (
                 <div className="card loading-card" style={{ padding: "30px" }}>
                   <div className="spinner"></div>
-                  <p>Embedding query, executing vector search, and reranking passages...</p>
+                  <p>Searching contract passages and reranking citations...</p>
                 </div>
               ) : qaModal.error ? (
                 <div className="toast-alert toast-error">⚠️ {qaModal.error}</div>
               ) : qaModal.response ? (
                 <div>
-                  {/* Hallucination Defense Banner if Insufficient Information */}
+                  {/* Insufficient Information Banner */}
                   {qaModal.response.insufficient_information ? (
                     <div className="qa-insufficient-banner">
-                      <span style={{ fontSize: "1.4rem" }}>🛡️</span>
+                      <span style={{ fontSize: "1.4rem" }}>ℹ️</span>
                       <div>
-                        <strong>Hallucination Defense Triggered:</strong>
+                        <strong>Verified Clause Not Found:</strong>
                         <p style={{ marginTop: "4px", fontSize: "0.88rem" }}>
                           {qaModal.response.message || "Insufficient evidence in contract to formulate a safe answer."}
                         </p>

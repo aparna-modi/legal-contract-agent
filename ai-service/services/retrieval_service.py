@@ -203,8 +203,8 @@ class RetrievalService:
                     f"(Top relevance score {max_score:.2f} is below the verification threshold of {min_score:.2f})"
                 ),
                 "answer": (
-                    "Based strictly on the provided contract text, there is insufficient evidence or no specific "
-                    f"clause addressing '{query}'. The system avoided hallucination by adhering to the verification threshold."
+                    "Based on the provided contract text, there is insufficient evidence or no specific "
+                    f"clause addressing '{query}'."
                 ),
             }
 

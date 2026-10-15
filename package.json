@@ -12,8 +12,9 @@
     "frontend:lint": "npm --prefix frontend run lint",
     "ai:start": "cd ai-service && uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload",
     "ai:test": "cd ai-service && uv run pytest -v",
+    "test:pipeline": "uv run --directory ai-service python ../scripts/verify_pipeline.py",
     "test:e2e": "node scripts/test_e2e.js",
-    "test": "npm run ai:test && npm run test:e2e"
+    "test": "npm run ai:test && npm run test:pipeline && npm run test:e2e"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
