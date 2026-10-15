@@ -173,8 +173,11 @@ class EmbeddingService:
         """
         for chunk in chunks:
             text_to_embed = chunk.text
-            if chunk.section_heading:
-                text_to_embed = f"{chunk.section_heading}: {chunk.text}"
+            heading = chunk.section_heading or ""
+            ctype = getattr(chunk, "clause_type", None) or ""
+            context_prefix = f"[{ctype} | {heading}]" if ctype and heading else (f"[{ctype or heading}]" if ctype or heading else "")
+            if context_prefix:
+                text_to_embed = f"{context_prefix} {chunk.text}"
 
             chunk.embedding = self.embed_text(text_to_embed)
             chunk.embedding_dim = len(chunk.embedding)

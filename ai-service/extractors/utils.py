@@ -47,10 +47,9 @@ def clean_text(text: str) -> str:
 
 # Common legal heading patterns
 LEGAL_HEADING_PATTERNS = [
-    re.compile(r"^(?:ARTICLE|SECTION|CLAUSE)\s+[0-9IVXLCDM]+(?:[\.\-:][\s\w]+)?", re.IGNORECASE),
-    re.compile(r"^(?:RECITAL|SCHEDULE|EXHIBIT|APPENDIX|ATTACHMENT)\s+[A-Z0-9]+", re.IGNORECASE),
-    re.compile(r"^\d+(?:\.\d+)*\s*[\.\-:]?\s+[A-Z][A-Za-z0-9\s,/\-\(\)]{2,80}$"),
-    re.compile(r"^[A-Z0-9\s\-_,/\(\)]{4,80}$"),  # All-caps headings
+    re.compile(r"^(?:ARTICLE|SECTION|CLAUSE|PART|SCHEDULE|EXHIBIT|APPENDIX|ATTACHMENT)\s+[A-Z0-9IVXLCDM]+(?:[\.\-:][\s\w&/,\-\(\)]+)?", re.IGNORECASE),
+    re.compile(r"^\d+(?:\.\d+)*\s*[\.\-:]?\s+[A-Z][A-Za-z0-9\s,&/:'\"\-\(\)]{2,120}$"),
+    re.compile(r"^[A-Z0-9\s\-_,&/:'\"\(\)]{4,120}$"),  # All-caps headings
 ]
 
 

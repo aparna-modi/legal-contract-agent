@@ -12,6 +12,9 @@ class DocumentChunk(BaseModel):
     end_char: int
     token_count: int
     chunk_type: str = "paragraph"  # "heading", "paragraph", "table", "clause", "list_item"
+    clause_type: Optional[str] = None
+    risk_level: Optional[str] = None
+    risk_reason: Optional[str] = None
     embedding: Optional[List[float]] = None
     embedding_dim: Optional[int] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -29,6 +32,7 @@ class ExtractionResult(BaseModel):
     chunks: List[DocumentChunk] = Field(default_factory=list)
     has_embeddings: bool = False
     embedding_model: Optional[str] = None
+    classified_clauses: List[Dict[str, Any]] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

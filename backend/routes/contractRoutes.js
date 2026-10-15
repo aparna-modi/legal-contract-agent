@@ -210,22 +210,33 @@ router.post("/:id/extract", protect, async (req, res) => {
     // 1. Idempotently clear previous clauses for this document
     await ClauseModel.deleteMany({ document: contract._id });
 
-    // 2. Persist parsed chunks into MongoDB Clause collection
-    const chunks = extractionResult.chunks || [];
-    const clausesToInsert = chunks.map((chunk) => {
-      let clauseType = chunk.section_heading || chunk.chunk_type || "general";
-      clauseType = clauseType.replace(/^\d+[\.\)]\s*/, "").trim() || "general";
-
-      return {
+    // 2. Persist parsed and classified clauses into MongoDB Clause collection
+    let clausesToInsert = [];
+    if (extractionResult.classified_clauses && extractionResult.classified_clauses.length > 0) {
+      clausesToInsert = extractionResult.classified_clauses.map((c) => ({
         document: contract._id,
-        clauseType,
-        text: chunk.text,
-        riskLevel: "low",
-        riskReason: chunk.section_heading
-          ? `Extracted under section '${chunk.section_heading}'`
-          : "Standard agreement clause",
-      };
-    });
+        clauseType: c.clause_type || "General Provision",
+        text: c.text,
+        riskLevel: c.risk_level || "low",
+        riskReason: c.risk_reason || "Standard contractual provision",
+      }));
+    } else {
+      const chunks = extractionResult.chunks || [];
+      clausesToInsert = chunks
+        .filter((chunk) => chunk.text && chunk.text.trim().length > 30)
+        .map((chunk) => {
+          let clauseType = chunk.clause_type || chunk.section_heading || "General Provision";
+          clauseType = clauseType.replace(/^\d+[\.\)]\s*/, "").trim() || "General Provision";
+
+          return {
+            document: contract._id,
+            clauseType,
+            text: chunk.text,
+            riskLevel: chunk.risk_level || "low",
+            riskReason: chunk.risk_reason || (chunk.section_heading ? `Extracted under '${chunk.section_heading}'` : "Standard agreement clause"),
+          };
+        });
+    }
 
     if (clausesToInsert.length > 0) {
       await ClauseModel.insertMany(clausesToInsert);

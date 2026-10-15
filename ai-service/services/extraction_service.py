@@ -4,6 +4,7 @@ from fastapi import HTTPException, UploadFile
 
 from extractors import ExtractionResult, get_extractor
 from services.embedding_service import embedding_service
+from services.clause_service import clause_service
 
 
 class ExtractionService:
@@ -19,6 +20,21 @@ class ExtractionService:
 
             extractor = get_extractor(file.filename)
             result = extractor.extract_from_bytes(content, file.filename)
+
+            # Run intelligent legal clause classification & risk assessment
+            if result.chunks:
+                chunk_dicts = [c.model_dump() for c in result.chunks]
+                classified = clause_service.process_chunks_into_clauses(chunk_dicts)
+                result.classified_clauses = classified
+
+                # Map back to chunk objects
+                clause_map = {c["clause_id"]: c for c in classified}
+                for c in result.chunks:
+                    cid = c.chunk_id
+                    if cid in clause_map:
+                        c.clause_type = clause_map[cid]["clause_type"]
+                        c.risk_level = clause_map[cid]["risk_level"]
+                        c.risk_reason = clause_map[cid]["risk_reason"]
 
             if embed and result.chunks:
                 embedding_service.embed_chunks(result.chunks)
@@ -59,6 +75,21 @@ class ExtractionService:
 
             extractor = get_extractor(ext_to_use)
             result = extractor.extract_from_bytes(content, display_name)
+
+            # Run intelligent legal clause classification & risk assessment
+            if result.chunks:
+                chunk_dicts = [c.model_dump() for c in result.chunks]
+                classified = clause_service.process_chunks_into_clauses(chunk_dicts)
+                result.classified_clauses = classified
+
+                # Map back to chunk objects
+                clause_map = {c["clause_id"]: c for c in classified}
+                for c in result.chunks:
+                    cid = c.chunk_id
+                    if cid in clause_map:
+                        c.clause_type = clause_map[cid]["clause_type"]
+                        c.risk_level = clause_map[cid]["risk_level"]
+                        c.risk_reason = clause_map[cid]["risk_reason"]
 
             if embed and result.chunks:
                 embedding_service.embed_chunks(result.chunks)
