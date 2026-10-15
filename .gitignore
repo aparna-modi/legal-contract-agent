@@ -147,3 +147,15 @@ vite.config.ts.timestamp-*
 
 # Backend uploads
 backend/uploads/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+ai-service/.venv/
+ai-service/chroma_db/
+ai-service/data/
+*.sqlite3
+

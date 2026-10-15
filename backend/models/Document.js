@@ -34,6 +34,30 @@ const documentSchema = new mongoose.Schema(
       enum: ["uploaded", "processing", "completed", "failed"],
       default: "uploaded",
     },
+    pageCount: {
+      type: Number,
+      default: 1,
+    },
+    totalTokens: {
+      type: Number,
+      default: 0,
+    },
+    totalSections: {
+      type: Number,
+      default: 0,
+    },
+    vectorIndexed: {
+      type: Boolean,
+      default: false,
+    },
+    vectorCount: {
+      type: Number,
+      default: 0,
+    },
+    extractedAt: {
+      type: Date,
+    },
+
   },
   {
     timestamps: true,

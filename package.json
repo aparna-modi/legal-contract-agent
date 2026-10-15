@@ -1,0 +1,22 @@
+{
+  "name": "legal-contract-agent",
+  "version": "1.0.0",
+  "description": "Legal Contract Agent - AI-driven legal document and clause analysis",
+  "scripts": {
+    "dev": "concurrently -k -n \"BACKEND,AI,FRONTEND\" -c \"cyan.bold,magenta.bold,green.bold\" \"npm run backend:dev\" \"npm run ai:start\" \"npm run frontend\"",
+    "start": "concurrently -k -n \"BACKEND,AI,FRONTEND\" -c \"cyan.bold,magenta.bold,green.bold\" \"npm run backend\" \"npm run ai:start\" \"npm run frontend\"",
+    "backend": "npm --prefix backend start",
+    "backend:dev": "npm --prefix backend run dev",
+    "frontend": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "frontend:lint": "npm --prefix frontend run lint",
+    "ai:start": "cd ai-service && uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload",
+    "ai:test": "cd ai-service && uv run pytest -v",
+    "test:pipeline": "uv run --directory ai-service python ../scripts/verify_pipeline.py",
+    "test:e2e": "node scripts/test_e2e.js",
+    "test": "npm run ai:test && npm run test:pipeline && npm run test:e2e"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
