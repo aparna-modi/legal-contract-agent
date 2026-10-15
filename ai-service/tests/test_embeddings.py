@@ -136,3 +136,52 @@ class TestEmbeddingEndpoints:
             assert chunk["embedding"] is not None
             assert len(chunk["embedding"]) == 384
             assert chunk["embedding_dim"] == 384
+
+    def test_gemini_embedding_service_mocked(self, monkeypatch):
+        mock_vector = [0.05] * 384
+
+        class MockResponse:
+            status_code = 200
+            def json(self):
+                return {"embedding": {"values": mock_vector}}
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key-12345")
+        service = EmbeddingService(dimension=384)
+        assert "gemini" in service.get_provider_name()
+
+        monkeypatch.setattr("httpx.Client.post", lambda *args, **kwargs: MockResponse())
+        res = service.embed_text("Test contract clause")
+        assert len(res) == 384
+        assert res == mock_vector
+
+    def test_gemini_batch_embedding_mocked(self, monkeypatch):
+        mock_vectors = [[0.02] * 384, [0.03] * 384]
+
+        class MockBatchResponse:
+            status_code = 200
+            def json(self):
+                return {"embeddings": [{"values": mock_vectors[0]}, {"values": mock_vectors[1]}]}
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key-12345")
+        service = EmbeddingService(dimension=384)
+
+        monkeypatch.setattr("httpx.Client.post", lambda *args, **kwargs: MockBatchResponse())
+        results = service.embed_batch(["Clause 1", "Clause 2"])
+        assert len(results) == 2
+        assert results == mock_vectors
+
+    def test_gemini_embedding_fallback_on_error(self, monkeypatch):
+        class MockErrorResponse:
+            status_code = 500
+            def json(self):
+                return {"error": "API quota exceeded"}
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key-12345")
+        service = EmbeddingService(dimension=384)
+
+        monkeypatch.setattr("httpx.Client.post", lambda *args, **kwargs: MockErrorResponse())
+        # Should gracefully fall back to local 384-d vectorizer without throwing
+        fallback_res = service.embed_text("Fallback clause")
+        assert len(fallback_res) == 384
+        assert any(x != 0.0 for x in fallback_res)
+

@@ -1,7 +1,10 @@
 import os
 import re
 from typing import Any, Dict, List, Optional
+from dotenv import load_dotenv
 import httpx
+
+load_dotenv()
 
 from services.embedding_service import embedding_service, LEGAL_KEYWORDS
 from services.vector_store import vector_store, BaseVectorStore
@@ -232,7 +235,10 @@ class RetrievalService:
         citations_summary = ", ".join({p["citation"] for p in passages[:3]})
 
         # If external LLM key is available, attempt remote call with strict hallucination defense prompt
-        if self.gemini_key or self.openai_key:
+        gemini_key = os.environ.get("GEMINI_API_KEY") or self.gemini_key
+        openai_key = os.environ.get("OPENAI_API_KEY") or self.openai_key
+
+        if gemini_key or openai_key:
             try:
                 # Built with strict zero-shot grounding prompt
                 context_block = "\n\n".join(
@@ -247,11 +253,37 @@ class RetrievalService:
                     "Grounded Answer (include page/section citations):"
                 )
 
-                if self.openai_key:
+                # 1. Prioritize Google Gemini API if key is configured
+                if gemini_key:
+                    with httpx.Client(timeout=15.0) as client:
+                        for model in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
+                            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
+                            payload = {
+                                "contents": [{"parts": [{"text": prompt}]}],
+                                "generationConfig": {
+                                    "temperature": 0.0,
+                                    "maxOutputTokens": 1024,
+                                },
+                            }
+                            resp = client.post(url, json=payload)
+                            if resp.status_code == 200:
+                                res_data = resp.json()
+                                candidates = res_data.get("candidates", [])
+                                if candidates:
+                                    parts = candidates[0].get("content", {}).get("parts", [])
+                                    if parts and "text" in parts[0]:
+                                        return parts[0]["text"].strip()
+                            elif resp.status_code == 404:
+                                continue  # Model unavailable in this region/tier, try next
+                            else:
+                                break
+
+                # 2. Fallback to OpenAI if configured
+                if openai_key:
                     with httpx.Client(timeout=10.0) as client:
                         resp = client.post(
                             "https://api.openai.com/v1/chat/completions",
-                            headers={"Authorization": f"Bearer {self.openai_key}"},
+                            headers={"Authorization": f"Bearer {openai_key}"},
                             json={
                                 "model": "gpt-4o-mini",
                                 "messages": [{"role": "user", "content": prompt}],

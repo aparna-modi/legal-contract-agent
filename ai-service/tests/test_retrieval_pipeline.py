@@ -117,3 +117,38 @@ def test_insufficient_information_hallucination_defense(test_retrieval_service):
     assert res["insufficient_information"] is True
     assert "Insufficient information" in res["message"]
     assert "insufficient evidence" in res["answer"].lower()
+
+
+def test_gemini_grounded_answer_synthesis(test_retrieval_service, monkeypatch):
+    """Verify Gemini API generateContent is invoked when GEMINI_API_KEY is configured."""
+    gemini_answer_text = "According to Section: Termination, either party may terminate with 30 days notice."
+
+    class MockGeminiResponse:
+        status_code = 200
+        def json(self):
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"text": gemini_answer_text}],
+                            "role": "model",
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key-xyz")
+    monkeypatch.setattr("httpx.Client.post", lambda *args, **kwargs: MockGeminiResponse())
+
+    passages = [
+        {
+            "chunk_id": "c1",
+            "text": "Either party may terminate upon 30 days notice.",
+            "citation": "Page 2, Section: 'Termination' [termination]",
+            "score": 0.85,
+        }
+    ]
+
+    answer = test_retrieval_service._synthesize_grounded_answer("How can we terminate?", passages)
+    assert answer == gemini_answer_text
+

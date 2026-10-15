@@ -3,7 +3,10 @@ import math
 import os
 import re
 from typing import List, Optional
+from dotenv import load_dotenv
 import httpx
+
+load_dotenv()
 
 from extractors.base import DocumentChunk
 
@@ -134,10 +137,12 @@ class EmbeddingService:
         self.gemini_key = os.environ.get("GEMINI_API_KEY")
 
     def get_provider_name(self) -> str:
-        if self.openai_key:
+        gemini_key = os.environ.get("GEMINI_API_KEY") or self.gemini_key
+        openai_key = os.environ.get("OPENAI_API_KEY") or self.openai_key
+        if gemini_key:
+            return f"gemini (text-embedding-004 | {self.dimension}-dim)"
+        if openai_key:
             return "openai (text-embedding-3-small)"
-        if self.gemini_key:
-            return "gemini (text-embedding-004)"
         return f"local-legal-vectorizer ({self.dimension}-dim)"
 
     def embed_text(self, text: str) -> List[float]:
@@ -145,13 +150,34 @@ class EmbeddingService:
         if not text:
             return [0.0] * self.dimension
 
-        # Attempt OpenAI if key configured
-        if self.openai_key:
+        # 1. Attempt Google Gemini text-embedding-004 if key configured
+        gemini_key = os.environ.get("GEMINI_API_KEY") or self.gemini_key
+        if gemini_key:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={gemini_key}"
+                payload = {
+                    "model": "models/text-embedding-004",
+                    "content": {"parts": [{"text": text}]},
+                    "outputDimensionality": self.dimension,
+                }
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.post(url, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        values = data.get("embedding", {}).get("values")
+                        if values and len(values) == self.dimension:
+                            return values
+            except Exception:
+                pass  # Fallback to next provider or local vectorizer
+
+        # 2. Attempt OpenAI if key configured
+        openai_key = os.environ.get("OPENAI_API_KEY") or self.openai_key
+        if openai_key:
             try:
                 with httpx.Client(timeout=10.0) as client:
                     resp = client.post(
                         "https://api.openai.com/v1/embeddings",
-                        headers={"Authorization": f"Bearer {self.openai_key}"},
+                        headers={"Authorization": f"Bearer {openai_key}"},
                         json={"input": text, "model": "text-embedding-3-small"},
                     )
                     if resp.status_code == 200:
@@ -163,7 +189,33 @@ class EmbeddingService:
         return self.local_vectorizer.vectorize(text)
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """Embed multiple text strings."""
+        """Embed multiple text strings with batch acceleration when available."""
+        if not texts:
+            return []
+
+        # Attempt Gemini batchEmbedContents if key configured
+        gemini_key = os.environ.get("GEMINI_API_KEY") or self.gemini_key
+        if gemini_key:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key={gemini_key}"
+                requests_payload = [
+                    {
+                        "model": "models/text-embedding-004",
+                        "content": {"parts": [{"text": t or ""}]},
+                        "outputDimensionality": self.dimension,
+                    }
+                    for t in texts
+                ]
+                with httpx.Client(timeout=15.0) as client:
+                    resp = client.post(url, json={"requests": requests_payload})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        embeddings = data.get("embeddings", [])
+                        if len(embeddings) == len(texts):
+                            return [item.get("values", []) for item in embeddings]
+            except Exception:
+                pass  # Fallback to single-item or local embeddings
+
         return [self.embed_text(t) for t in texts]
 
     def embed_chunks(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
