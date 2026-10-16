@@ -1,0 +1,9 @@
+{
+  "python.analysis.extraPaths": [
+    "ai-service"
+  ],
+  "python.autoComplete.extraPaths": [
+    "ai-service"
+  ],
+  "python.defaultInterpreterPath": "${workspaceFolder}/ai-service/.venv/Scripts/python.exe"
+}

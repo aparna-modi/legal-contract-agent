@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
 import { Link } from "react-router-dom";
+import { API_BASE_URL } from "../config/api";
 
 const Dashboard = () => {
   const { token, isAuthenticated } = useAuth();
@@ -36,7 +37,7 @@ const Dashboard = () => {
 
   const fetchVectorStats = useCallback(() => {
     if (!token) return;
-    fetch("http://localhost:5000/api/contracts/stats/vectors", {
+    fetch(`${API_BASE_URL}/api/contracts/stats/vectors`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : null))
@@ -51,7 +52,7 @@ const Dashboard = () => {
 
     setLoading(true);
     setError(null);
-    fetch("http://localhost:5000/api/contracts", {
+    fetch(`${API_BASE_URL}/api/contracts`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -86,7 +87,7 @@ const Dashboard = () => {
     try {
       setExtractingId(contractId);
       setExtractMessage(null);
-      const res = await fetch(`http://localhost:5000/api/contracts/${contractId}/extract`, {
+      const res = await fetch(`${API_BASE_URL}/api/contracts/${contractId}/extract`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -124,7 +125,7 @@ const Dashboard = () => {
     });
 
     try {
-      const res = await fetch(`http://localhost:5000/api/contracts/${contract._id}/clauses`, {
+      const res = await fetch(`${API_BASE_URL}/api/contracts/${contract._id}/clauses`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -170,8 +171,8 @@ const Dashboard = () => {
 
     try {
       const url = contract
-        ? `http://localhost:5000/api/contracts/${contract._id}/ask`
-        : `http://localhost:5000/api/contracts/search`;
+        ? `${API_BASE_URL}/api/contracts/${contract._id}/ask`
+        : `${API_BASE_URL}/api/contracts/search`;
 
       const res = await fetch(url, {
         method: "POST",
@@ -217,7 +218,7 @@ const Dashboard = () => {
 
     try {
       setDeletingId(contractId);
-      const res = await fetch(`http://localhost:5000/api/contracts/${contractId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/contracts/${contractId}`, {
         method: "DELETE",
         headers: {
           Authorization: `Bearer ${token}`,
