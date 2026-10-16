@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
 import { Link, useNavigate } from "react-router-dom";
+import { API_BASE_URL } from "../config/api";
 
 const UploadScreen = () => {
   const [file, setFile] = useState(null);
@@ -113,7 +114,7 @@ const UploadScreen = () => {
     }
 
     try {
-      const response = await fetch("http://localhost:5001/api/contracts/upload", {
+      const response = await fetch(`${API_BASE_URL}/api/contracts/upload`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
