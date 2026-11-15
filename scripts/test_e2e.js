@@ -47,7 +47,12 @@ async function ensureServicesRunning() {
   if (!aiRunning) {
     console.log("   -> AI Microservice not detected on port 8000. Auto-spawning background instance...");
     const aiServiceDir = path.join(__dirname, "../ai-service");
-    spawnedAiProc = spawn("uv", ["run", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"], {
+    const venvCandidates = [
+      path.join(aiServiceDir, ".venv/Scripts/python.exe"),
+      path.join(aiServiceDir, ".venv/bin/python"),
+    ];
+    const pythonBin = venvCandidates.find((p) => fs.existsSync(p)) || "python";
+    spawnedAiProc = spawn(pythonBin, ["-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"], {
       cwd: aiServiceDir,
       stdio: "pipe",
     });

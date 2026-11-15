@@ -135,13 +135,15 @@ class EmbeddingService:
         self.local_vectorizer = DeterministicLegalVectorizer(dimension=dimension)
         self.openai_key = os.environ.get("OPENAI_API_KEY")
         self.gemini_key = os.environ.get("GEMINI_API_KEY")
+        self._disabled_gemini_keys = set()
+        self._disabled_openai_keys = set()
 
     def get_provider_name(self) -> str:
         gemini_key = os.environ.get("GEMINI_API_KEY") or self.gemini_key
         openai_key = os.environ.get("OPENAI_API_KEY") or self.openai_key
-        if gemini_key:
+        if gemini_key and gemini_key not in self._disabled_gemini_keys:
             return f"gemini (text-embedding-004 | {self.dimension}-dim)"
-        if openai_key:
+        if openai_key and openai_key not in self._disabled_openai_keys:
             return "openai (text-embedding-3-small)"
         return f"local-legal-vectorizer ({self.dimension}-dim)"
 
@@ -152,7 +154,7 @@ class EmbeddingService:
 
         # 1. Attempt Google Gemini text-embedding-004 if key configured
         gemini_key = os.environ.get("GEMINI_API_KEY") or self.gemini_key
-        if gemini_key:
+        if gemini_key and gemini_key not in self._disabled_gemini_keys:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={gemini_key}"
                 payload = {
@@ -167,12 +169,13 @@ class EmbeddingService:
                         values = data.get("embedding", {}).get("values")
                         if values and len(values) == self.dimension:
                             return values
+                    self._disabled_gemini_keys.add(gemini_key)
             except Exception:
-                pass  # Fallback to next provider or local vectorizer
+                self._disabled_gemini_keys.add(gemini_key)
 
         # 2. Attempt OpenAI if key configured
         openai_key = os.environ.get("OPENAI_API_KEY") or self.openai_key
-        if openai_key:
+        if openai_key and openai_key not in self._disabled_openai_keys:
             try:
                 with httpx.Client(timeout=10.0) as client:
                     resp = client.post(
@@ -183,8 +186,9 @@ class EmbeddingService:
                     if resp.status_code == 200:
                         data = resp.json()
                         return data["data"][0]["embedding"]
+                    self._disabled_openai_keys.add(openai_key)
             except Exception:
-                pass  # Fallback to local vectorizer
+                self._disabled_openai_keys.add(openai_key)
 
         return self.local_vectorizer.vectorize(text)
 
@@ -195,7 +199,7 @@ class EmbeddingService:
 
         # Attempt Gemini batchEmbedContents if key configured
         gemini_key = os.environ.get("GEMINI_API_KEY") or self.gemini_key
-        if gemini_key:
+        if gemini_key and gemini_key not in self._disabled_gemini_keys:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key={gemini_key}"
                 requests_payload = [
@@ -213,8 +217,9 @@ class EmbeddingService:
                         embeddings = data.get("embeddings", [])
                         if len(embeddings) == len(texts):
                             return [item.get("values", []) for item in embeddings]
+                    self._disabled_gemini_keys.add(gemini_key)
             except Exception:
-                pass  # Fallback to single-item or local embeddings
+                self._disabled_gemini_keys.add(gemini_key)
 
         return [self.embed_text(t) for t in texts]
 
