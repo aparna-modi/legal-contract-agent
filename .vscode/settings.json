@@ -2,7 +2,20 @@
   "python.analysis.extraPaths": [
     "./ai-service",
     "./ai-service/extractors",
-    "./ai-service/services"
+    "./ai-service/services",
+    "./ai-service/.venv/Lib/site-packages"
   ],
-  "python.defaultInterpreterPath": "${workspaceFolder}/ai-service/.venv/Scripts/python.exe"
+  "python.autoComplete.extraPaths": [
+    "./ai-service",
+    "./ai-service/extractors",
+    "./ai-service/services",
+    "./ai-service/.venv/Lib/site-packages"
+  ],
+  "python.defaultInterpreterPath": "${workspaceFolder}/ai-service/.venv/Scripts/python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.terminal.activateEnvInCurrentTerminal": true,
+  "terminal.integrated.env.windows": {
+    "PATH": "${workspaceFolder}\\ai-service\\.venv\\Scripts;${env:PATH}",
+    "PYTHONPATH": "${workspaceFolder}\\ai-service"
+  }
 }
