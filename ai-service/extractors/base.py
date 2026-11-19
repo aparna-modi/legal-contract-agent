@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -11,7 +12,7 @@ class DocumentChunk(BaseModel):
     start_char: int
     end_char: int
     token_count: int
-    chunk_type: str = "paragraph"  # "heading", "paragraph", "table", "clause", "list_item"
+    chunk_type: str = "paragraph"
     clause_type: Optional[str] = None
     risk_level: Optional[str] = None
     risk_reason: Optional[str] = None
@@ -33,19 +34,21 @@ class ExtractionResult(BaseModel):
     has_embeddings: bool = False
     embedding_model: Optional[str] = None
     classified_clauses: List[Dict[str, Any]] = Field(default_factory=list)
+    missing_clauses: List[Dict[str, str]] = Field(default_factory=list)
+    risk_summary: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class BaseDocumentExtractor(ABC):
     @abstractmethod
     def extract_from_bytes(self, content: bytes, filename: str) -> ExtractionResult:
-        """Extract structured content and chunks from raw file bytes."""
-        pass
+        """Extract structured text and layout-aware chunks from raw file bytes."""
 
     def extract_from_path(self, file_path: str) -> ExtractionResult:
-        """Extract structured content and chunks from a local file path."""
+        """Read a local file and delegate to extract_from_bytes."""
         import os
+
         filename = os.path.basename(file_path)
-        with open(file_path, "rb") as f:
-            content = f.read()
+        with open(file_path, "rb") as handle:
+            content = handle.read()
         return self.extract_from_bytes(content, filename)

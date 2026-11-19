@@ -1,6 +1,7 @@
 import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
+
 import chromadb
 from chromadb.config import Settings
 
@@ -8,11 +9,7 @@ from services.embedding_service import embedding_service
 
 
 class BaseVectorStore(ABC):
-    """
-    Abstract Vector Store Adapter Interface.
-    Enables zero-friction development with ChromaDB/FAISS and future seamless
-    migration to Qdrant or enterprise vector databases without code modifications.
-    """
+    """Vector store adapter interface so ChromaDB can be swapped for Qdrant later."""
 
     @abstractmethod
     def upsert_chunks(
@@ -21,8 +18,7 @@ class BaseVectorStore(ABC):
         document_id: str,
         chunks: List[Dict[str, Any]],
     ) -> int:
-        """Upsert a list of document chunks with embeddings and metadata."""
-        pass
+        """Upsert document chunks along with embeddings and citation metadata."""
 
     @abstractmethod
     def search(
@@ -32,38 +28,27 @@ class BaseVectorStore(ABC):
         document_id: Optional[str] = None,
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Perform multi-tenant similarity search filtered by user_id and optional document_id."""
-        pass
+        """Run similarity search filtered strictly by user_id (and optional document_id)."""
 
     @abstractmethod
     def delete_by_document(self, user_id: str, document_id: str) -> int:
-        """Delete all vectors associated with a specific document and user."""
-        pass
+        """Delete all vectors belonging to a specific document and user."""
 
     @abstractmethod
     def delete_by_user(self, user_id: str) -> int:
         """Delete all vectors owned by a user."""
-        pass
 
     @abstractmethod
     def count(self, user_id: Optional[str] = None) -> int:
         """Return total vector count or vector count for a specific user."""
-        pass
 
     @abstractmethod
     def stats(self) -> Dict[str, Any]:
-        """Return health and storage telemetry."""
-        pass
+        """Return operational telemetry for the vector store."""
 
 
 class ChromaVectorStore(BaseVectorStore):
-    """
-    Production-grade ChromaDB Vector Store Implementation.
-    - Persistent disk storage with automatic collection lifecycle.
-    - Strict multi-tenant isolation via mandatory user_id metadata filtering.
-    - Cosine similarity HNSW index.
-    - Supports full legal chunk metadata schema.
-    """
+    """Persistent ChromaDB store using HNSW cosine indexing and tenant-scoped queries."""
 
     def __init__(
         self,
@@ -71,7 +56,6 @@ class ChromaVectorStore(BaseVectorStore):
         collection_name: str = "legal_contracts",
     ):
         if not persist_directory:
-            # Default to local directory inside ai-service
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             persist_directory = os.path.join(base_dir, "chroma_db")
 
@@ -84,7 +68,6 @@ class ChromaVectorStore(BaseVectorStore):
             settings=Settings(anonymized_telemetry=False, allow_reset=True),
         )
 
-        # Initialize collection with cosine similarity space
         self.collection = self.client.get_or_create_collection(
             name=self.collection_name,
             metadata={"hnsw:space": "cosine", "description": "Legal Contract Agent Vector Index"},
@@ -96,36 +79,44 @@ class ChromaVectorStore(BaseVectorStore):
         document_id: str,
         chunks: List[Dict[str, Any]],
     ) -> int:
-        """
-        Batch upsert chunks into ChromaDB.
-        Generates deterministic IDs and attaches complete legal metadata for citation and isolation.
-        """
+        """Batch upsert contract chunks with deterministic tenant-scoped vector IDs."""
         if not user_id or not document_id or not chunks:
             return 0
+
+        valid_entries: List[tuple[int, Dict[str, Any], str]] = []
+        missing_embed_inputs: List[tuple[int, str]] = []
+
+        for idx, chunk in enumerate(chunks):
+            text = (chunk.get("text") or "").strip()
+            if not text:
+                continue
+            valid_entries.append((idx, chunk, text))
+            if not chunk.get("embedding"):
+                heading = chunk.get("section_heading") or chunk.get("section") or ""
+                ctype = chunk.get("clause_type") or ""
+                prefix = f"[{ctype} | {heading}] " if ctype and heading else (f"[{heading}] " if heading else "")
+                missing_embed_inputs.append((len(valid_entries) - 1, f"{prefix}{text}"))
+
+        if not valid_entries:
+            return 0
+
+        computed_embeddings: Dict[int, List[float]] = {}
+        if missing_embed_inputs:
+            batch_texts = [item[1] for item in missing_embed_inputs]
+            batch_vecs = embedding_service.embed_batch(batch_texts, task_type="RETRIEVAL_DOCUMENT")
+            for (entry_idx, _), vec in zip(missing_embed_inputs, batch_vecs):
+                computed_embeddings[entry_idx] = vec
 
         ids: List[str] = []
         embeddings: List[List[float]] = []
         documents: List[str] = []
         metadatas: List[Dict[str, Any]] = []
 
-        for idx, chunk in enumerate(chunks):
-            # Resolve chunk ID
-            raw_chunk_id = chunk.get("chunk_id") or f"chunk_{idx:04d}"
+        for entry_idx, (orig_idx, chunk, text) in enumerate(valid_entries):
+            raw_chunk_id = chunk.get("chunk_id") or f"chunk_{orig_idx:04d}"
             vector_id = f"{user_id}_{document_id}_{raw_chunk_id}"
+            embedding = chunk.get("embedding") or computed_embeddings[entry_idx]
 
-            text = chunk.get("text", "").strip()
-            if not text:
-                continue
-
-            # Resolve or compute embedding
-            embedding = chunk.get("embedding")
-            if not embedding:
-                # Include section heading for stronger contextual indexing
-                heading = chunk.get("section_heading") or chunk.get("section") or ""
-                embed_input = f"{heading}: {text}" if heading else text
-                embedding = embedding_service.embed_text(embed_input)
-
-            # Metadata schema adhering to OJT Project Design document
             meta: Dict[str, Any] = {
                 "user_id": str(user_id),
                 "document_id": str(document_id),
@@ -143,16 +134,12 @@ class ChromaVectorStore(BaseVectorStore):
             documents.append(text)
             metadatas.append(meta)
 
-        if not ids:
-            return 0
-
         self.collection.upsert(
             ids=ids,
             embeddings=embeddings,
             documents=documents,
             metadatas=metadatas,
         )
-
         return len(ids)
 
     def search(
@@ -162,16 +149,12 @@ class ChromaVectorStore(BaseVectorStore):
         document_id: Optional[str] = None,
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
-        """
-        Execute multi-tenant semantic similarity search.
-        Enforces user_id filtering to guarantee zero cross-user vector leakage.
-        """
+        """Run cosine similarity search strictly scoped to user_id (and optional document_id)."""
         if not user_id or not query_vector:
             return []
 
-        # Construct multi-tenant where clause
         if document_id:
-            where_clause = {
+            where_clause: Dict[str, Any] = {
                 "$and": [
                     {"user_id": str(user_id)},
                     {"document_id": str(document_id)},
@@ -180,10 +163,10 @@ class ChromaVectorStore(BaseVectorStore):
         else:
             where_clause = {"user_id": str(user_id)}
 
-        # Cap top_k to available vectors or sensible limit
         total_items = self.collection.count()
         if total_items == 0:
             return []
+
         effective_k = min(top_k, max(1, total_items))
 
         results = self.collection.query(
@@ -193,23 +176,21 @@ class ChromaVectorStore(BaseVectorStore):
             include=["documents", "metadatas", "distances"],
         )
 
-        output: List[Dict[str, Any]] = []
-
         if not results or not results.get("ids") or not results["ids"][0]:
-            return output
+            return []
 
         ids = results["ids"][0]
         docs = results["documents"][0] if results.get("documents") else []
         metas = results["metadatas"][0] if results.get("metadatas") else []
         distances = results["distances"][0] if results.get("distances") else []
 
+        output: List[Dict[str, Any]] = []
         for i, vec_id in enumerate(ids):
             meta = metas[i] if i < len(metas) else {}
             doc_text = docs[i] if i < len(docs) else ""
             dist = distances[i] if i < len(distances) else 1.0
 
-            # Cosine distance in Chroma ranges from 0 (identical) to 2 (opposite)
-            # Cosine similarity = 1.0 - distance
+            # Chroma cosine distance spans [0, 2]; convert to similarity in [0, 1].
             sim_score = max(0.0, min(1.0, round(1.0 - dist, 4)))
 
             output.append(
@@ -232,7 +213,6 @@ class ChromaVectorStore(BaseVectorStore):
         return output
 
     def delete_by_document(self, user_id: str, document_id: str) -> int:
-        """Purge all vector entries belonging to a specific document under user_id."""
         if not user_id or not document_id:
             return 0
 
@@ -243,16 +223,13 @@ class ChromaVectorStore(BaseVectorStore):
             ]
         }
 
-        # Query existing IDs to determine deleted count
         existing = self.collection.get(where=where_clause)
         ids_to_delete = existing.get("ids", [])
         if ids_to_delete:
             self.collection.delete(ids=ids_to_delete)
-
         return len(ids_to_delete)
 
     def delete_by_user(self, user_id: str) -> int:
-        """Purge all vectors owned by a user."""
         if not user_id:
             return 0
 
@@ -260,18 +237,15 @@ class ChromaVectorStore(BaseVectorStore):
         ids_to_delete = existing.get("ids", [])
         if ids_to_delete:
             self.collection.delete(ids=ids_to_delete)
-
         return len(ids_to_delete)
 
     def count(self, user_id: Optional[str] = None) -> int:
-        """Count total vectors or vectors for a specific user."""
         if user_id:
             res = self.collection.get(where={"user_id": str(user_id)})
             return len(res.get("ids", []))
         return self.collection.count()
 
     def stats(self) -> Dict[str, Any]:
-        """Return operational telemetry."""
         return {
             "provider": "ChromaDB (HNSW Cosine)",
             "collection_name": self.collection_name,
@@ -281,5 +255,4 @@ class ChromaVectorStore(BaseVectorStore):
         }
 
 
-# Global vector store instance
 vector_store = ChromaVectorStore()

@@ -2,14 +2,16 @@ import datetime
 import os
 import sys
 from typing import Any, Dict
+
 import psutil
 
 from services.embedding_service import embedding_service
+from services.llm_client import llm_client
 from services.vector_store import vector_store
 
 
 def get_gpu_status() -> Dict[str, Any]:
-    """Check GPU availability safely without hard requirement on torch."""
+    """Detect optional CUDA or Apple Silicon acceleration without requiring PyTorch."""
     gpu_info: Dict[str, Any] = {
         "available": False,
         "mode": "CPU-only",
@@ -19,6 +21,7 @@ def get_gpu_status() -> Dict[str, Any]:
 
     try:
         import torch
+
         if torch.cuda.is_available():
             gpu_info["available"] = True
             gpu_info["mode"] = "CUDA"
@@ -37,33 +40,27 @@ def get_gpu_status() -> Dict[str, Any]:
             gpu_info["available"] = True
             gpu_info["mode"] = "Apple Silicon MPS"
     except ImportError:
-        gpu_info["note"] = "PyTorch not installed; running standard CPU parsing pipeline"
-    except Exception as e:
-        gpu_info["error"] = str(e)
+        gpu_info["note"] = "Running standard CPU pipeline"
+    except Exception as err:
+        gpu_info["error"] = str(err)
 
     return gpu_info
 
 
 def get_health_status() -> Dict[str, Any]:
-    """Collect comprehensive hardware telemetry and service readiness."""
+    """Collect runtime health metrics, active AI providers, and vector index stats."""
     process = psutil.Process(os.getpid())
-    process_mem = process.memory_info().rss / (1024 * 1024)  # MB
+    process_mem = process.memory_info().rss / (1024 * 1024)
 
     sys_mem = psutil.virtual_memory()
     total_mem_mb = round(sys_mem.total / (1024 * 1024), 1)
     avail_mem_mb = round(sys_mem.available / (1024 * 1024), 1)
     used_mem_mb = round(sys_mem.used / (1024 * 1024), 1)
 
-    cpu_percent = psutil.cpu_percent(interval=None)
-    cpu_count_logical = psutil.cpu_count(logical=True)
-    cpu_count_physical = psutil.cpu_count(logical=False)
-
-    gpu_status = get_gpu_status()
-
     return {
         "status": "healthy",
-        "service": "Legal Contract Agent - AI Ingestion & Parsing Service",
-        "version": "1.0.0",
+        "service": "Legal Contract Agent - AI Service",
+        "version": "1.2.0",
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "python_version": sys.version.split()[0],
         "system": {
@@ -75,11 +72,11 @@ def get_health_status() -> Dict[str, Any]:
                 "process_memory_mb": round(process_mem, 1),
             },
             "cpu": {
-                "percent_used": cpu_percent,
-                "logical_cores": cpu_count_logical,
-                "physical_cores": cpu_count_physical,
+                "percent_used": psutil.cpu_percent(interval=None),
+                "logical_cores": psutil.cpu_count(logical=True),
+                "physical_cores": psutil.cpu_count(logical=False),
             },
-            "gpu": gpu_status,
+            "gpu": get_gpu_status(),
         },
         "extractors_ready": {
             "pdf": True,
@@ -89,7 +86,7 @@ def get_health_status() -> Dict[str, Any]:
         },
         "embeddings_ready": True,
         "embedding_provider": embedding_service.get_provider_name(),
+        "llm_provider": llm_client.get_active_provider(),
         "vector_store_ready": True,
         "vector_store": vector_store.stats(),
     }
-
