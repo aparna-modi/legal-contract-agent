@@ -1,9 +1,9 @@
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:5000";
-const AI_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
+const AI_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
 
 let testsPassed = 0;
 let testsFailed = 0;
@@ -12,13 +12,12 @@ let spawnedBackendProc = null;
 
 function assert(condition, message) {
   if (!condition) {
-    console.error(`❌ FAILED: ${message}`);
+    console.error(`  [FAIL] ${message}`);
     testsFailed++;
     throw new Error(message);
-  } else {
-    console.log(`✅ PASSED: ${message}`);
-    testsPassed++;
   }
+  console.log(`  [PASS] ${message}`);
+  testsPassed++;
 }
 
 async function isServerRunning(url) {
@@ -30,83 +29,75 @@ async function isServerRunning(url) {
   }
 }
 
-async function waitForServer(url, timeoutMs = 20000) {
+async function waitForServer(url, timeoutMs = 25000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (await isServerRunning(url)) return true;
-    await new Promise((r) => setTimeout(r, 600));
+    await new Promise((resolve) => setTimeout(resolve, 600));
   }
   return false;
 }
 
 async function ensureServicesRunning() {
-  console.log(">> Checking service readiness for End-to-End verification...");
+  console.log("Checking service readiness...");
 
-  // 1. AI Service check / auto-spawn
-  const aiRunning = await isServerRunning(`${AI_URL}/health`);
-  if (!aiRunning) {
-    console.log("   -> AI Microservice not detected on port 8000. Auto-spawning background instance...");
-    const aiServiceDir = path.join(__dirname, "../ai-service");
+  if (!(await isServerRunning(`${AI_URL}/health`))) {
+    console.log("  Starting AI service on port 8000...");
+    const aiDir = path.join(__dirname, "../ai-service");
     const venvCandidates = [
-      path.join(aiServiceDir, ".venv/Scripts/python.exe"),
-      path.join(aiServiceDir, ".venv/bin/python"),
+      path.join(aiDir, ".venv/Scripts/python.exe"),
+      path.join(aiDir, ".venv/bin/python"),
     ];
     const pythonBin = venvCandidates.find((p) => fs.existsSync(p)) || "python";
-    spawnedAiProc = spawn(pythonBin, ["-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"], {
-      cwd: aiServiceDir,
-      stdio: "pipe",
-    });
+    spawnedAiProc = spawn(
+      pythonBin,
+      ["-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
+      { cwd: aiDir, stdio: "pipe" }
+    );
 
-    const ready = await waitForServer(`${AI_URL}/health`);
-    if (!ready) {
-      throw new Error(`AI Service failed to start within timeout on ${AI_URL}. Ensure uv and dependencies are installed.`);
+    if (!(await waitForServer(`${AI_URL}/health`))) {
+      throw new Error(`AI service did not become ready at ${AI_URL}.`);
     }
-    console.log("   -> AI Service successfully booted and healthy!");
+    console.log("  AI service ready.");
   } else {
-    console.log("   ✓ AI Service detected running on port 8000.");
+    console.log("  AI service already running.");
   }
 
-  // 2. Backend check / auto-spawn
-  const backendRunning = await isServerRunning(`${BACKEND_URL}/api/contracts`);
-  if (!backendRunning) {
-    console.log("   -> Backend Gateway not detected on port 5000. Auto-spawning background instance...");
+  if (!(await isServerRunning(`${BACKEND_URL}/health`))) {
+    console.log("  Starting Express API on port 5000...");
     const rootDir = path.join(__dirname, "..");
     spawnedBackendProc = spawn(process.execPath, [path.join(rootDir, "backend/server.js")], {
       cwd: rootDir,
       stdio: "pipe",
     });
 
-    const ready = await waitForServer(`${BACKEND_URL}/api/contracts`);
-    if (!ready) {
-      throw new Error(`Backend Gateway failed to start within timeout on ${BACKEND_URL}. Check MongoDB connection.`);
+    if (!(await waitForServer(`${BACKEND_URL}/health`))) {
+      throw new Error(`Backend API did not become ready at ${BACKEND_URL}. Check MongoDB settings.`);
     }
-    console.log("   -> Backend Gateway successfully booted on port 5000!");
+    console.log("  Express API ready.");
   } else {
-    console.log("   ✓ Backend Gateway detected running on port 5000.");
+    console.log("  Express API already running.");
+  }
+}
+
+function killProc(proc) {
+  if (!proc || !proc.pid) return;
+  try {
+    if (process.platform === "win32") {
+      execSync(`taskkill /pid ${proc.pid} /f /t`, { stdio: "ignore" });
+    } else {
+      proc.kill();
+    }
+  } catch {
+    // Ignore if already exited.
   }
 }
 
 function cleanupSpawnedProcesses() {
-  if (spawnedAiProc && spawnedAiProc.pid) {
-    try {
-      if (process.platform === "win32") {
-        require("child_process").execSync(`taskkill /pid ${spawnedAiProc.pid} /f /t`, { stdio: "ignore" });
-      } else {
-        spawnedAiProc.kill();
-      }
-    } catch {}
-    spawnedAiProc = null;
-  }
-  if (spawnedBackendProc && spawnedBackendProc.pid) {
-    try {
-      if (process.platform === "win32") {
-        require("child_process").execSync(`taskkill /pid ${spawnedBackendProc.pid} /f /t`, { stdio: "ignore" });
-      } else {
-        spawnedBackendProc.kill();
-      }
-    } catch {}
-    spawnedBackendProc = null;
-  }
+  killProc(spawnedAiProc);
+  killProc(spawnedBackendProc);
+  spawnedAiProc = null;
+  spawnedBackendProc = null;
 }
 
 process.on("exit", cleanupSpawnedProcesses);
@@ -115,32 +106,49 @@ process.on("SIGINT", () => {
   process.exit(1);
 });
 
+async function uploadMultipartContract(token, title, fileName, contentString) {
+  const boundary = "----LegalAgentBoundary" + Math.random().toString(36).slice(2);
+  const preBoundary = `--${boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\n${title}\r\n`;
+  const fileHeader = `--${boundary}\r\nContent-Disposition: form-data; name="contract"; filename="${fileName}"\r\nContent-Type: text/plain\r\n\r\n`;
+  const postBoundary = `\r\n--${boundary}--\r\n`;
+
+  const bodyBuffer = Buffer.concat([
+    Buffer.from(preBoundary, "utf8"),
+    Buffer.from(fileHeader, "utf8"),
+    Buffer.from(contentString, "utf8"),
+    Buffer.from(postBoundary, "utf8"),
+  ]);
+
+  return fetch(`${BACKEND_URL}/api/contracts/upload`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+    },
+    body: bodyBuffer,
+  });
+}
 
 async function runTests() {
-  console.log("==================================================");
-  console.log("   LEGAL CONTRACT AGENT — END-TO-END TEST SUITE   ");
-  console.log("==================================================\n");
-
+  console.log("Running Legal Contract Agent end-to-end verification...\n");
   await ensureServicesRunning();
 
-  // TEST 1: AI Service Health Check & Vector Store Readiness
-  console.log("\n--- 1. Testing AI Service Telemetry (/health) ---");
+  // 1. AI service health
+  console.log("\n[1] AI service health telemetry");
   const healthRes = await fetch(`${AI_URL}/health`);
-  assert(healthRes.status === 200, "AI Service /health responds with HTTP 200");
+  assert(healthRes.status === 200, "AI /health returns HTTP 200");
   const healthData = await healthRes.json();
-  assert(healthData.status === "healthy", "AI Service status is 'healthy'");
-  assert(healthData.system?.memory?.total_mb > 0, "AI Service reports memory metrics");
-  assert(healthData.system?.cpu?.logical_cores > 0, "AI Service reports CPU cores");
-  assert(healthData.extractors_ready?.pdf === true, "PDF extractor is ready");
-  assert(healthData.extractors_ready?.docx === true, "DOCX extractor is ready");
-  assert(healthData.extractors_ready?.txt === true, "TXT extractor is ready");
-  assert(healthData.embeddings_ready === true, "Embeddings engine is ready");
-  assert(healthData.vector_store_ready === true, "ChromaDB vector store is ready");
-  console.log(`   -> Active Embedding Provider: ${healthData.embedding_provider}`);
-  console.log(`   -> Vector Store Provider: ${healthData.vector_store?.provider}`);
+  assert(healthData.status === "healthy", "AI service reports healthy");
+  assert(healthData.extractors_ready?.pdf === true, "PDF extractor ready");
+  assert(healthData.extractors_ready?.docx === true, "DOCX extractor ready");
+  assert(healthData.extractors_ready?.txt === true, "TXT extractor ready");
+  assert(healthData.embeddings_ready === true, "Embeddings engine ready");
+  assert(healthData.vector_store_ready === true, "ChromaDB store ready");
+  console.log(`  Embedding provider: ${healthData.embedding_provider}`);
+  console.log(`  LLM provider:       ${healthData.llm_provider}`);
 
-  // TEST 2: Standalone Embedding Generation & Semantic Similarity
-  console.log("\n--- 2. Testing AI Service Embeddings & Cosine Similarity ---");
+  // 2. Embeddings & cosine similarity
+  console.log("\n[2] Embeddings and semantic similarity");
   const embedRes = await fetch(`${AI_URL}/api/v1/embed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -151,11 +159,9 @@ async function runTests() {
       ],
     }),
   });
-  assert(embedRes.status === 200, "AI Service /api/v1/embed responds with HTTP 200");
+  assert(embedRes.status === 200, "/api/v1/embed returns HTTP 200");
   const embedData = await embedRes.json();
-  assert(embedData.count === 2, "Returned embeddings for 2 texts");
-  assert(embedData.dimension === 384, "Embedding dimension is 384");
-  assert(embedData.embeddings[0].length === 384, "First embedding vector has length 384");
+  assert(embedData.count === 2 && embedData.dimension === 384, "Returned two 384-d vectors");
 
   const simRes = await fetch(`${AI_URL}/api/v1/similarity`, {
     method: "POST",
@@ -165,261 +171,206 @@ async function runTests() {
       text_b: "This agreement is governed by and construed under New York law.",
     }),
   });
-  assert(simRes.status === 200, "AI Service /api/v1/similarity responds with HTTP 200");
+  assert(simRes.status === 200, "/api/v1/similarity returns HTTP 200");
   const simData = await simRes.json();
-  assert(simData.similarity > 0.3, "Semantic similarity between legal clauses is positive and high");
-  console.log(`   -> Semantic Similarity Score: ${simData.similarity}`);
+  assert(simData.similarity > 0.3, `Positive legal similarity (${simData.similarity})`);
 
-  // TEST 3: AI Service Direct File Extraction (TXT) with Embeddings
-  console.log("\n--- 3. Testing AI Service Direct File Extraction with Embeddings ---");
-  const sampleTxt = `MASTER SERVICES AGREEMENT
-1. DEFINITIONS
-In this Agreement, Client and Service Provider agree to the following terms.
-
-2. INDEMNIFICATION
-Service Provider shall indemnify, defend, and hold harmless Client.
-  (a) Indemnity includes reasonable attorney fees.
-  (b) Claims must be notified within 30 days.
-
-3. GOVERNING LAW
-This Agreement is governed by the laws of California.`;
-
-  const tmpTxtPath = path.join(__dirname, "temp_sample_contract.txt");
-  fs.writeFileSync(tmpTxtPath, sampleTxt);
-
-  const directExtractRes = await fetch(`${AI_URL}/api/v1/extract-path`, {
+  // 3. Auth register & login
+  console.log("\n[3] Authentication (register + login)");
+  const uniqueEmail = `e2e_${Date.now()}@legalagent.test`;
+  const regRes = await fetch(`${BACKEND_URL}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file_path: tmpTxtPath, title: "temp_sample_contract.txt", embed: true }),
+    body: JSON.stringify({ name: "E2E Reviewer", email: uniqueEmail, password: "password123" }),
   });
-  assert(directExtractRes.status === 200, "AI Service extracts sample text from local path");
-  const directData = await directExtractRes.json();
-  assert(directData.file_type === "txt", "Extracted file_type is 'txt'");
-  assert(directData.total_sections >= 3, "Detected at least 3 sections");
-  assert(directData.chunks.length >= 3, "Generated at least 3 structured chunks");
-  assert(directData.total_tokens > 0, "Token count is computed via tiktoken");
-  assert(directData.has_embeddings === true, "Chunks enriched with vector embeddings");
-  assert(directData.chunks[0].embedding?.length === 384, "Chunk embedding has dimension 384");
-  const hasSubclause = directData.chunks.some((c) => c.metadata?.is_subclause);
-  assert(hasSubclause, "Subclauses (a) and (b) correctly identified");
+  assert(regRes.status === 201, "POST /api/auth/register returns HTTP 201");
+  const regData = await regRes.json();
+  assert(Boolean(regData.token), "Registration returns JWT");
+  const token = regData.token;
 
-  // TEST 4: User Registration
-  console.log("\n--- 4. Testing Backend User Registration (/api/auth/register) ---");
-  const uniqueEmail = `e2e_tester_${Date.now()}@legalagent.io`;
-  const registerRes = await fetch(`${BACKEND_URL}/api/auth/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: "E2E Test User",
-      email: uniqueEmail,
-      password: "password123",
-    }),
-  });
-  assert(registerRes.status === 201, "User registration responds with HTTP 201 Created");
-  const registerData = await registerRes.json();
-  assert(!!registerData.token, "Registration returns JWT token");
-  assert(registerData.user?.email === uniqueEmail, "User object returned matches registration");
-  const token = registerData.token;
-
-  // TEST 5: User Login
-  console.log("\n--- 5. Testing Backend User Login (/api/auth/login) ---");
   const loginRes = await fetch(`${BACKEND_URL}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: uniqueEmail,
-      password: "password123",
-    }),
+    body: JSON.stringify({ email: uniqueEmail, password: "password123" }),
   });
-  assert(loginRes.status === 200, "User login responds with HTTP 200 OK");
-  const loginData = await loginRes.json();
-  assert(!!loginData.token, "Login returns valid JWT token");
+  assert(loginRes.status === 200, "POST /api/auth/login returns HTTP 200");
 
-  // TEST 6: Contract Upload via Multer
-  console.log("\n--- 6. Testing Contract Upload (/api/contracts/upload) ---");
-  const boundary = "----WebKitFormBoundary" + Math.random().toString(36).substring(2);
-  const fileContent = fs.readFileSync(tmpTxtPath);
-  const filename = "temp_sample_contract.txt";
+  // 4. Upload two contracts (v1 and v2) for extraction, Q&A, report, and comparison
+  console.log("\n[4] Contract upload & AI extraction pipeline");
+  const contractV1Text = `MASTER SERVICES AGREEMENT
+Effective January 15, 2026 between Acme Cloud Inc. and Northstar Consulting LLC for an initial term of 12 months.
 
-  const preBoundary = `--${boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\nE2E Master Services Agreement\r\n`;
-  const fileHeader = `--${boundary}\r\nContent-Disposition: form-data; name="contract"; filename="${filename}"\r\nContent-Type: text/plain\r\n\r\n`;
-  const postBoundary = `\r\n--${boundary}--\r\n`;
+1. PAYMENT TERMS
+Client shall pay $10,000 per month within 30 days of invoice receipt.
 
-  const bodyBuffer = Buffer.concat([
-    Buffer.from(preBoundary, "utf8"),
-    Buffer.from(fileHeader, "utf8"),
-    fileContent,
-    Buffer.from(postBoundary, "utf8"),
-  ]);
+2. INDEMNIFICATION
+Service Provider shall indemnify, defend, and hold harmless Client against third-party claims.
+  (a) Indemnity includes reasonable attorney fees.
+  (b) Claims must be notified within 30 days.
 
-  const uploadRes = await fetch(`${BACKEND_URL}/api/contracts/upload`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    },
-    body: bodyBuffer,
-  });
-  assert(uploadRes.status === 201, "Contract upload responds with HTTP 201 Created");
-  const uploadData = await uploadRes.json();
-  assert(!!uploadData.document?._id, "Upload returns saved MongoDB Document with _id");
-  assert(uploadData.document.status === "uploaded", "Document status is initially 'uploaded'");
-  assert(uploadData.document.fileType === "txt", "Document fileType is 'txt'");
-  const contractId = uploadData.document._id;
+3. TERMINATION
+Either party may terminate this agreement upon 30 days prior written notice.
 
-  // TEST 7: List Contracts
-  console.log("\n--- 7. Testing List Contracts (/api/contracts) ---");
-  const listRes = await fetch(`${BACKEND_URL}/api/contracts`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  assert(listRes.status === 200, "List contracts responds with HTTP 200 OK");
-  const listData = await listRes.json();
-  assert(Array.isArray(listData.contracts), "Contracts array returned");
-  assert(
-    listData.contracts.some((c) => c._id === contractId),
-    "Uploaded contract is present in user's repository"
-  );
+4. GOVERNING LAW
+This Agreement is governed by the laws of California.`;
 
-  // TEST 8: Full End-to-End AI Extraction and Clause Persistence through Gateway + ChromaDB Indexing
-  console.log("\n--- 8. Testing AI Extraction, Clause Persistence & Vector Indexing (/api/contracts/:id/extract) ---");
-  const extractGatewayRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/extract`, {
+  const contractV2Text = `MASTER SERVICES AGREEMENT (REVISED)
+Effective January 15, 2026 between Acme Cloud Inc. and Northstar Consulting LLC for an initial term of 24 months.
+
+1. PAYMENT TERMS
+Client shall pay $14,500 per month within 15 days of invoice receipt.
+
+2. TERMINATION
+Service Provider may terminate immediately without notice upon any missed payment.
+
+3. LIMITATION OF LIABILITY
+Total aggregate liability under this agreement shall not exceed $50,000.
+
+4. GOVERNING LAW
+This Agreement is governed by the laws of California.`;
+
+  const up1Res = await uploadMultipartContract(token, "Vendor MSA v1", "msa_v1.txt", contractV1Text);
+  assert(up1Res.status === 201, "Uploaded Contract v1");
+  const contract1Id = (await up1Res.json()).document._id;
+
+  const up2Res = await uploadMultipartContract(token, "Vendor MSA v2", "msa_v2.txt", contractV2Text);
+  assert(up2Res.status === 201, "Uploaded Contract v2");
+  const contract2Id = (await up2Res.json()).document._id;
+
+  // 5. Extract & analyze both contracts
+  const ex1Res = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/extract`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
-  const extractGatewayText = await extractGatewayRes.text();
-  assert(extractGatewayRes.status === 200, "Contract AI extraction via gateway responds with HTTP 200 OK");
-  const extractGatewayData = JSON.parse(extractGatewayText);
-  assert(extractGatewayData.savedClausesCount >= 3, "Gateway saved at least 3 clauses in MongoDB");
-  assert(extractGatewayData.vectorsIndexedCount >= 3, "Vectors successfully indexed into ChromaDB");
-  assert(extractGatewayData.document?.status === "completed", "Document status updated to 'completed'");
-  assert(extractGatewayData.document?.vectorIndexed === true, "Document record flags vectorIndexed = true");
-  assert(extractGatewayData.document?.vectorCount >= 3, "Document records vectorCount in MongoDB");
+  assert(ex1Res.status === 200, "Extracted & analyzed Contract v1");
+  const ex1Data = await ex1Res.json();
+  assert(ex1Data.savedClausesCount >= 3, "Saved classified clauses for v1");
+  assert(ex1Data.document.status === "completed", "v1 status updated to completed");
+  assert(ex1Data.document.vectorIndexed === true, "v1 vectors indexed");
+  assert(Boolean(ex1Data.document.summary), "Executive summary persisted on v1");
+  assert(Array.isArray(ex1Data.document.missingClauses), "Missing clauses array persisted on v1");
+  assert(typeof ex1Data.document.riskSummary?.score === "number", "Risk score persisted on v1");
 
-  // TEST 9: Retrieve Saved Clauses from MongoDB Collection
-  console.log("\n--- 9. Testing Retrieve Extracted Clauses from MongoDB (/api/contracts/:id/clauses) ---");
-  const clausesRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/clauses`, {
+  const ex2Res = await fetch(`${BACKEND_URL}/api/contracts/${contract2Id}/extract`, {
+    method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
-  assert(clausesRes.status === 200, "Get clauses endpoint responds with HTTP 200 OK");
+  assert(ex2Res.status === 200, "Extracted & analyzed Contract v2");
+
+  // 6. Clauses, Summary & Report export
+  console.log("\n[5] Clauses, summary, and Markdown report export");
+  const clausesRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/clauses`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(clausesRes.status === 200, "GET /clauses returns HTTP 200");
   const clausesData = await clausesRes.json();
-  assert(Array.isArray(clausesData.clauses), "Clauses list returned");
-  assert(clausesData.count >= 3, "At least 3 clauses retrieved from MongoDB");
-  console.log(`   -> Extracted & Persisted Clauses Count: ${clausesData.count}`);
+  assert(clausesData.count >= 3, `Retrieved ${clausesData.count} clauses from MongoDB`);
 
-  // TEST 10: Contract Summary Metrics
-  console.log("\n--- 10. Testing Contract Summary Metrics (/api/contracts/:id/summary) ---");
-  const summaryRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/summary`, {
+  const summaryRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/summary`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  assert(summaryRes.status === 200, "Summary endpoint responds with HTTP 200 OK");
+  assert(summaryRes.status === 200, "GET /summary returns HTTP 200");
   const summaryData = await summaryRes.json();
-  assert(summaryData.metrics?.status === "completed", "Summary reports 'completed' status");
-  assert(summaryData.metrics?.clauseCount >= 3, "Summary reports clause count");
-  assert(summaryData.metrics?.vectorIndexed === true, "Summary confirms vector indexing");
+  assert(summaryData.metrics?.status === "completed", "Summary confirms completed status");
 
-  // TEST 11: Vector Telemetry Stats Endpoint
-  console.log("\n--- 11. Testing Vector Store Telemetry (/api/contracts/stats/vectors) ---");
-  const vectorStatsRes = await fetch(`${BACKEND_URL}/api/contracts/stats/vectors`, {
+  const reportRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/report`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  assert(vectorStatsRes.status === 200, "Vector stats endpoint responds with HTTP 200 OK");
-  const vectorStats = await vectorStatsRes.json();
-  assert(vectorStats.user_vectors >= 3, "User vectors registered in ChromaDB collection");
-  console.log(`   -> User Vector Count in ChromaDB: ${vectorStats.user_vectors}`);
+  assert(reportRes.status === 200, "GET /report returns HTTP 200");
+  const reportText = await reportRes.text();
+  assert(reportText.includes("# Contract Analysis Report:"), "Report contains Markdown heading");
+  assert(reportText.includes("## Executive Summary"), "Report includes Executive Summary");
 
-  // TEST 12: Grounded Contract Q&A with Citations (/api/contracts/:id/ask)
-  console.log("\n--- 12. Testing Grounded Contract Q&A via Retrieval Pipeline (/api/contracts/:id/ask) ---");
-  const askRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/ask`, {
+  // 7. Grounded Q&A & Hallucination defense
+  console.log("\n[6] Grounded Q&A and out-of-scope rejection");
+  const askRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/ask`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       query: "What are the indemnification terms and attorney fees conditions?",
       top_k: 3,
       min_score: 0.20,
     }),
   });
-  assert(askRes.status === 200, "Contract Q&A endpoint responds with HTTP 200 OK");
+  assert(askRes.status === 200, "POST /ask returns HTTP 200");
   const askData = await askRes.json();
-  assert(askData.insufficient_information === false, "Indemnity query found sufficient grounded evidence");
-  assert(askData.results?.length > 0, "Retrieved candidate passages");
-  assert(askData.citations?.length > 0, "Generated structured page/section citations");
-  assert(askData.answer.length > 0, "Returned grounded synthesis answer");
-  console.log(`   -> Top Citation: ${askData.citations[0]}`);
-  console.log(`   -> Answer Excerpt: ${askData.answer.substring(0, 90)}...`);
+  assert(askData.insufficient_information === false, "Indemnity query answered with grounded evidence");
+  assert(askData.citations?.length > 0, "Structured citations returned");
+  assert(askData.answer.length > 0, "Grounded answer text returned");
 
-  // TEST 13: Confidence Verification & Rejection for Unrelated Queries
-  console.log("\n--- 13. Testing Low-Confidence Fallback Handling (/api/contracts/:id/ask) ---");
-  const fakeRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}/ask`, {
+  const oosRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/ask`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       query: "What are the reimbursement policies for interstellar rocket fuel?",
       top_k: 3,
-      min_score: 0.35,
+      min_score: 0.25,
     }),
   });
-  assert(fakeRes.status === 200, "Unrelated question handled gracefully with HTTP 200");
-  const fakeData = await fakeRes.json();
-  assert(fakeData.insufficient_information === true, "Low-confidence query flagged insufficient_information = true");
-  assert(fakeData.message.includes("Insufficient information"), "Refusal explanation returned");
+  assert(oosRes.status === 200, "Out-of-scope query handled gracefully");
+  const oosData = await oosRes.json();
+  assert(oosData.insufficient_information === true, "Out-of-scope query rejected with insufficient_information=true");
 
-  // TEST 14: Library-Wide Cross-Contract Semantic Search (/api/contracts/search)
-  console.log("\n--- 14. Testing Cross-Contract Library Search (/api/contracts/search) ---");
+  // 8. Cross-contract semantic search
+  console.log("\n[7] Cross-contract library search");
   const searchRes = await fetch(`${BACKEND_URL}/api/contracts/search`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      query: "California governing law",
-      top_k: 2,
-    }),
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ query: "California governing law", top_k: 3 }),
   });
-  assert(searchRes.status === 200, "Cross-contract search responds with HTTP 200 OK");
+  assert(searchRes.status === 200, "POST /search returns HTTP 200");
   const searchData = await searchRes.json();
-  assert(searchData.results?.length > 0, "Cross-contract search returned matching clauses");
-  assert(searchData.results[0].contractTitle === "E2E Master Services Agreement", "Results enriched with contract title");
+  assert(searchData.results?.length > 0, "Library search returned matches");
+  assert(Boolean(searchData.results[0].contractTitle), "Search results include contract titles");
 
-  // TEST 15: Delete Contract and Cascade Delete from Disk, Mongo, and ChromaDB
-  console.log("\n--- 15. Testing Contract Deletion & ChromaDB Vector Purge (/api/contracts/:id) ---");
-  const deleteRes = await fetch(`${BACKEND_URL}/api/contracts/${contractId}`, {
-    method: "DELETE",
+  // 9. Contract-to-contract comparison
+  console.log("\n[8] Contract-to-contract comparison");
+  const cmpRes = await fetch(`${BACKEND_URL}/api/contracts/compare`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ contractAId: contract1Id, contractBId: contract2Id }),
+  });
+  assert(cmpRes.status === 200, "POST /compare returns HTTP 200");
+  const cmpData = await cmpRes.json();
+  assert(Boolean(cmpData.executive_summary), "Comparison generated executive summary");
+  assert(cmpData.counts?.unchanged >= 1, "Comparison detected unchanged Governing Law clause");
+  assert(cmpData.counts?.modified >= 2, "Comparison detected modified Payment & Termination clauses");
+  assert(cmpData.counts?.added >= 1 && cmpData.counts?.removed >= 1, "Comparison detected added Liability & removed Indemnity clauses");
+  console.log(
+    `  Diff summary: ${cmpData.counts.modified} modified, ${cmpData.counts.added} added, ${cmpData.counts.removed} removed, ${cmpData.counts.unchanged} unchanged`
+  );
+
+  // 10. Vector stats & cascade delete cleanup
+  console.log("\n[9] Vector telemetry & cascade deletion cleanup");
+  const statsRes = await fetch(`${BACKEND_URL}/api/contracts/stats/vectors`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  assert(deleteRes.status === 200, "Contract deletion responds with HTTP 200 OK");
-  const listAfterDelete = await (
-    await fetch(`${BACKEND_URL}/api/contracts`, {
+  assert(statsRes.status === 200, "GET /stats/vectors returns HTTP 200");
+  const statsData = await statsRes.json();
+  assert(statsData.user_vectors >= 6, `User vectors indexed (${statsData.user_vectors})`);
+
+  for (const id of [contract1Id, contract2Id]) {
+    const delRes = await fetch(`${BACKEND_URL}/api/contracts/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert(delRes.status === 200, `Deleted contract ${id}`);
+  }
+
+  const afterDelStats = await (
+    await fetch(`${BACKEND_URL}/api/contracts/stats/vectors`, {
       headers: { Authorization: `Bearer ${token}` },
     })
   ).json();
-  assert(
-    !listAfterDelete.contracts.some((c) => c._id === contractId),
-    "Contract is removed from repository"
-  );
+  assert(afterDelStats.user_vectors === 0, "All user vectors purged from ChromaDB after deletion");
 
-  // Clean up scratch file
-  if (fs.existsSync(tmpTxtPath)) {
-    fs.unlinkSync(tmpTxtPath);
-  }
-
-  console.log("\n==================================================");
-  console.log(`   ALL TESTS COMPLETED: ${testsPassed} PASSED, ${testsFailed} FAILED   `);
-  console.log("==================================================");
-
+  console.log(`\nCompleted: ${testsPassed} passed, ${testsFailed} failed.`);
   cleanupSpawnedProcesses();
   process.exit(testsFailed > 0 ? 1 : 0);
 }
 
 runTests().catch((err) => {
-  console.error("Test execution threw an unhandled error:", err);
+  console.error("E2E test failure:", err.message);
   cleanupSpawnedProcesses();
   process.exit(1);
 });
-

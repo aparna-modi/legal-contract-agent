@@ -1,21 +1,23 @@
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
-require("dotenv").config();
-const express = require("express");
-const app = express();
-const cors = require("cors");
-const connectDB = require("./config/db");
 
-app.use(cors());
-app.use(express.json());
+const express = require("express");
+const cors = require("cors");
 const mongoose = require("mongoose");
+
+const connectDB = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
 const contractRoutes = require("./routes/contractRoutes");
 
+const app = express();
+
+app.use(cors());
+app.use(express.json({ limit: "2mb" }));
+
 app.get("/", (req, res) => {
   res.json({
-    status: "Legal Contract Agent API Gateway is running",
-    version: "1.0.0",
+    status: "Legal Contract Agent API is running",
+    version: "1.2.0",
     endpoints: {
       auth: "/api/auth",
       contracts: "/api/contracts",
@@ -27,8 +29,8 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({
     status: "healthy",
-    gateway: "Legal Contract Agent - Express API Gateway",
-    version: "1.0.0",
+    service: "Legal Contract Agent API",
+    version: "1.2.0",
     database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
   });
 });
@@ -36,17 +38,28 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/contracts", contractRoutes);
 
+// Catch malformed JSON payloads or unexpected middleware errors as JSON.
+app.use((err, req, res, next) => {
+  if (err && err.type === "entity.parse.failed") {
+    return res.status(400).json({ message: "Invalid JSON payload." });
+  }
+  console.error("Unhandled API error:", err?.message || err);
+  res.status(err?.status || 500).json({
+    message: err?.message || "Internal server error",
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   try {
     await connectDB();
-
     app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
+      console.log(`API server listening on http://localhost:${PORT}`);
     });
   } catch (error) {
     console.error("Failed to start server:", error.message);
+    process.exit(1);
   }
 };
 
