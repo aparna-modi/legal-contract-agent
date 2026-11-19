@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useAuth } from "../context/AuthContext";
 import { Link, useNavigate } from "react-router-dom";
-import { API_BASE_URL } from "../config/api";
+import { authApi } from "../api/client";
+import { useAuth } from "../context/AuthContext";
+import { BrandMark, CheckCircleIcon } from "../components/Icons";
 
-const Register = () => {
+export default function Register() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -15,115 +16,123 @@ const Register = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
     setError(null);
 
     if (password.length < 6) {
       setError("Password must be at least 6 characters long.");
-      setLoading(false);
       return;
     }
 
+    setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        // If server returns token, log in directly; otherwise navigate to login
-        if (data.token) {
-          login(data.user, data.token);
-          navigate("/");
-        } else {
-          navigate("/login");
-        }
+      const data = await authApi.register({ name, email, password });
+      if (data.token) {
+        login(data.user, data.token);
+        navigate("/");
       } else {
-        setError(data.message || "Registration failed. Please try again.");
+        navigate("/login");
       }
     } catch (err) {
-      console.error("Registration request failed:", err);
-      setError("Unable to connect to backend server. Ensure port 5000 is running.");
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="auth-container">
-      <div className="card auth-card">
-        <div className="auth-header">
-          <div className="auth-icon">📝</div>
-          <h2>Create Account</h2>
-          <p>Join Legal Contract Agent to automate contract analysis</p>
+    <div className="auth-split">
+      <aside className="auth-aside">
+        <BrandMark size={30} />
+        <h2 className="auth-aside-title">Build a searchable library of your agreements.</h2>
+        <p className="auth-aside-copy">
+          Upload PDFs, Word agreements, or plain text contracts. Extract key facts, inspect risk
+          drivers, and export structured Markdown review reports.
+        </p>
+        <ul className="auth-checklist">
+          <li>
+            <CheckCircleIcon size={15} />
+            <span>Executive summaries & key-fact extraction</span>
+          </li>
+          <li>
+            <CheckCircleIcon size={15} />
+            <span>Side-by-side contract comparison</span>
+          </li>
+          <li>
+            <CheckCircleIcon size={15} />
+            <span>Cross-contract semantic search</span>
+          </li>
+        </ul>
+      </aside>
+
+      <section className="auth-panel">
+        <div className="auth-panel-head">
+          <h1>Create account</h1>
+          <p>Start reviewing contracts in under a minute.</p>
         </div>
 
-        {error && (
-          <div className="toast-alert toast-error">
-            <span>⚠️</span>
-            <span>{error}</span>
-          </div>
-        )}
+        {error && <div className="alert alert-error">{error}</div>}
 
         <form onSubmit={handleSubmit} className="auth-form">
-          <div className="form-group">
-            <label className="form-label">Full Name</label>
+          <div className="field">
+            <label htmlFor="reg-name" className="field-label">
+              Full name
+            </label>
             <input
+              id="reg-name"
               type="text"
-              placeholder="Jane Doe"
+              className="text-input"
+              placeholder="Aarav Sharma"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="form-input"
               required
               disabled={loading}
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Email Address</label>
+          <div className="field">
+            <label htmlFor="reg-email" className="field-label">
+              Email address
+            </label>
             <input
+              id="reg-email"
               type="email"
-              placeholder="jane@company.com"
+              className="text-input"
+              placeholder="name@company.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="form-input"
               required
               disabled={loading}
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Password</label>
+          <div className="field">
+            <label htmlFor="reg-password" className="field-label">
+              Password
+            </label>
             <input
+              id="reg-password"
               type="password"
+              className="text-input"
               placeholder="At least 6 characters"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="form-input"
               required
               disabled={loading}
             />
           </div>
 
           <button type="submit" className="btn btn-primary btn-full" disabled={loading}>
-            {loading ? "Creating Account..." : "Create Account"}
+            {loading ? "Creating account..." : "Create account"}
           </button>
         </form>
 
-        <div className="auth-footer">
-          <p>
-            Already have an account?{" "}
-            <Link to="/login" className="auth-link">
-              Sign In
-            </Link>
-          </p>
-        </div>
-      </div>
+        <p className="auth-switch">
+          Already have an account?{" "}
+          <Link to="/login" className="inline-link">
+            Sign in
+          </Link>
+        </p>
+      </section>
     </div>
   );
-};
-
-export default Register;
+}
