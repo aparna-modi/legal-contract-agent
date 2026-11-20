@@ -2,8 +2,8 @@ const fs = require("fs");
 const path = require("path");
 const { spawn, execSync } = require("child_process");
 
-const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:5000";
-const AI_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
+let BACKEND_URL = process.env.BACKEND_URL || "http://localhost:5000";
+let AI_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
 
 let testsPassed = 0;
 let testsFailed = 0;
@@ -20,19 +20,23 @@ function assert(condition, message) {
   testsPassed++;
 }
 
-async function isServerRunning(url) {
+async function probeService(url) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(1500) });
-    return res.status >= 200 && res.status < 500;
+    if (res.status === 200) {
+      const data = await res.json().catch(() => null);
+      if (data && data.status === "healthy") return "healthy";
+    }
+    return "occupied";
   } catch {
-    return false;
+    return "free";
   }
 }
 
-async function waitForServer(url, timeoutMs = 25000) {
+async function waitForHealthy(url, timeoutMs = 25000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (await isServerRunning(url)) return true;
+    if ((await probeService(url)) === "healthy") return true;
     await new Promise((resolve) => setTimeout(resolve, 600));
   }
   return false;
@@ -41,8 +45,16 @@ async function waitForServer(url, timeoutMs = 25000) {
 async function ensureServicesRunning() {
   console.log("Checking service readiness...");
 
-  if (!(await isServerRunning(`${AI_URL}/health`))) {
-    console.log("  Starting AI service on port 8000...");
+  let aiPort = Number(new URL(AI_URL).port || 8000);
+  const aiState = await probeService(`${AI_URL}/health`);
+  if (aiState !== "healthy") {
+    if (aiState === "occupied") {
+      aiPort = 8011;
+      AI_URL = `http://127.0.0.1:${aiPort}`;
+      console.log(`  Port 8000 is in use by another process; starting AI service on port ${aiPort}...`);
+    } else {
+      console.log(`  Starting AI service on port ${aiPort}...`);
+    }
     const aiDir = path.join(__dirname, "../ai-service");
     const venvCandidates = [
       path.join(aiDir, ".venv/Scripts/python.exe"),
@@ -51,11 +63,11 @@ async function ensureServicesRunning() {
     const pythonBin = venvCandidates.find((p) => fs.existsSync(p)) || "python";
     spawnedAiProc = spawn(
       pythonBin,
-      ["-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
+      ["-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", String(aiPort)],
       { cwd: aiDir, stdio: "pipe" }
     );
 
-    if (!(await waitForServer(`${AI_URL}/health`))) {
+    if (!(await waitForHealthy(`${AI_URL}/health`))) {
       throw new Error(`AI service did not become ready at ${AI_URL}.`);
     }
     console.log("  AI service ready.");
@@ -63,15 +75,29 @@ async function ensureServicesRunning() {
     console.log("  AI service already running.");
   }
 
-  if (!(await isServerRunning(`${BACKEND_URL}/health`))) {
-    console.log("  Starting Express API on port 5000...");
+  let backendPort = Number(new URL(BACKEND_URL).port || 5000);
+  const backendState = await probeService(`${BACKEND_URL}/health`);
+  // If we had to use an alternate AI port, spin up a dedicated backend pointing to it.
+  if (backendState !== "healthy" || aiPort !== 8000) {
+    if (backendState !== "free") {
+      backendPort = 5011;
+      BACKEND_URL = `http://127.0.0.1:${backendPort}`;
+      console.log(`  Starting isolated Express API on port ${backendPort}...`);
+    } else {
+      console.log(`  Starting Express API on port ${backendPort}...`);
+    }
     const rootDir = path.join(__dirname, "..");
     spawnedBackendProc = spawn(process.execPath, [path.join(rootDir, "backend/server.js")], {
       cwd: rootDir,
       stdio: "pipe",
+      env: {
+        ...process.env,
+        PORT: String(backendPort),
+        AI_SERVICE_URL: AI_URL,
+      },
     });
 
-    if (!(await waitForServer(`${BACKEND_URL}/health`))) {
+    if (!(await waitForHealthy(`${BACKEND_URL}/health`))) {
       throw new Error(`Backend API did not become ready at ${BACKEND_URL}. Check MongoDB settings.`);
     }
     console.log("  Express API ready.");
@@ -281,8 +307,15 @@ This Agreement is governed by the laws of California.`;
   assert(reportText.includes("# Contract Analysis Report:"), "Report contains Markdown heading");
   assert(reportText.includes("## Executive Summary"), "Report includes Executive Summary");
 
-  // 7. Grounded Q&A & Hallucination defense
-  console.log("\n[6] Grounded Q&A and out-of-scope rejection");
+  const risksRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/risks`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(risksRes.status === 200, "GET /risks returns HTTP 200");
+  const risksData = await risksRes.json();
+  assert(Array.isArray(risksData.flaggedClauses), "GET /risks returns flaggedClauses array");
+
+  // 7. Grounded Q&A, Persistence, Feedback & Hallucination defense
+  console.log("\n[6] Grounded Q&A, history, feedback, and out-of-scope rejection");
   const askRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/ask`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -297,6 +330,21 @@ This Agreement is governed by the laws of California.`;
   assert(askData.insufficient_information === false, "Indemnity query answered with grounded evidence");
   assert(askData.citations?.length > 0, "Structured citations returned");
   assert(askData.answer.length > 0, "Grounded answer text returned");
+  assert(Boolean(askData.qaId), "Persisted Q&A record returns qaId");
+
+  const fbRes = await fetch(`${BACKEND_URL}/api/feedback`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ qaId: askData.qaId, rating: "up", comment: "Clear citation" }),
+  });
+  assert(fbRes.status === 200, "POST /api/feedback saves user rating");
+
+  const qaHistRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/qa`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(qaHistRes.status === 200, "GET /qa returns saved history");
+  const qaHistData = await qaHistRes.json();
+  assert(qaHistData.count >= 1 && qaHistData.history[0].feedback?.rating === "up", "Q&A history includes saved feedback");
 
   const oosRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/ask`, {
     method: "POST",
@@ -340,8 +388,19 @@ This Agreement is governed by the laws of California.`;
     `  Diff summary: ${cmpData.counts.modified} modified, ${cmpData.counts.added} added, ${cmpData.counts.removed} removed, ${cmpData.counts.unchanged} unchanged`
   );
 
-  // 10. Vector stats & cascade delete cleanup
-  console.log("\n[9] Vector telemetry & cascade deletion cleanup");
+  // 10. Workspace Analytics & Audit Trail
+  console.log("\n[9] Portfolio analytics and audit trail");
+  const analyticsRes = await fetch(`${BACKEND_URL}/api/analytics/overview`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(analyticsRes.status === 200, "GET /api/analytics/overview returns HTTP 200");
+  const analyticsData = await analyticsRes.json();
+  assert(analyticsData.portfolio?.analyzedContracts >= 2, "Analytics counts analyzed contracts");
+  assert(analyticsData.qaMetrics?.feedbackUp >= 1, "Analytics aggregates feedback ratings");
+  assert(analyticsData.recentActivity?.length >= 3, "Audit log recorded recent actions");
+
+  // 11. Vector stats & cascade delete cleanup
+  console.log("\n[10] Vector telemetry & cascade deletion cleanup");
   const statsRes = await fetch(`${BACKEND_URL}/api/contracts/stats/vectors`, {
     headers: { Authorization: `Bearer ${token}` },
   });

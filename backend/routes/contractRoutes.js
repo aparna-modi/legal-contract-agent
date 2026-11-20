@@ -6,7 +6,11 @@ const mongoose = require("mongoose");
 
 const DocumentModel = require("../models/Document");
 const ClauseModel = require("../models/Clause");
+const QuestionAnswerModel = require("../models/QuestionAnswer");
+const FeedbackModel = require("../models/Feedback");
 const { protect } = require("../middleware/authMiddleware");
+const { aiLimiter } = require("../middleware/rateLimiters");
+const { recordAudit } = require("../utils/audit");
 
 const router = express.Router();
 
@@ -154,6 +158,13 @@ router.post("/upload", protect, (req, res) => {
         status: "uploaded",
       });
 
+      recordAudit(req, {
+        action: "upload",
+        resourceType: "contract",
+        resourceId: newDoc._id,
+        summary: `Uploaded "${newDoc.title}" (${ext.toUpperCase()})`,
+      });
+
       res.status(201).json({
         message: "Contract uploaded successfully.",
         document: newDoc,
@@ -175,7 +186,8 @@ router.get("/", protect, async (req, res) => {
   }
 });
 
-router.post("/search", protect, async (req, res) => {
+router.post("/search", protect, aiLimiter, async (req, res) => {
+  const startedAt = Date.now();
   try {
     const { query, top_k = 5, min_score = 0.20, use_reranker = true } = req.body;
     if (!query || !query.trim()) {
@@ -223,14 +235,35 @@ router.post("/search", protect, async (req, res) => {
       });
     }
 
-    res.json(searchData);
+    const savedQa = await QuestionAnswerModel.create({
+      user: req.user._id,
+      document: null,
+      query: query.trim(),
+      answer: searchData.answer || "",
+      citations: searchData.citations || [],
+      confidence: searchData.confidence || "NONE",
+      insufficientInformation: Boolean(searchData.insufficient_information),
+      provider: searchData.provider || "",
+      latencyMs: Date.now() - startedAt,
+    }).catch(() => null);
+
+    recordAudit(req, {
+      action: "search",
+      resourceType: "library",
+      summary: `Searched library: "${query.trim().slice(0, 70)}"`,
+    });
+
+    res.json({
+      qaId: savedQa?._id || null,
+      ...searchData,
+    });
   } catch (error) {
     console.error("Library search error:", error);
     res.status(500).json({ message: "Failed to search contract library.", error: error.message });
   }
 });
 
-router.post("/compare", protect, async (req, res) => {
+router.post("/compare", protect, aiLimiter, async (req, res) => {
   try {
     const { contractAId, contractBId } = req.body;
     if (!contractAId || !contractBId) {
@@ -284,6 +317,14 @@ router.post("/compare", protect, async (req, res) => {
     }
 
     const comparison = await aiResponse.json();
+
+    recordAudit(req, {
+      action: "compare",
+      resourceType: "comparison",
+      resourceId: `${contractA._id}:${contractB._id}`,
+      summary: `Compared "${contractA.title}" vs "${contractB.title}"`,
+    });
+
     res.json({
       contractAId: contractA._id,
       contractBId: contractB._id,
@@ -349,16 +390,28 @@ router.delete("/:id", protect, async (req, res) => {
       console.warn("Could not purge vectors from ChromaDB:", vErr.message);
     }
 
-    await ClauseModel.deleteMany({ document: contract._id });
-    await DocumentModel.findByIdAndDelete(req.params.id);
-    res.json({ message: "Contract, clauses, and vector embeddings deleted." });
+    await Promise.all([
+      ClauseModel.deleteMany({ document: contract._id }),
+      QuestionAnswerModel.deleteMany({ document: contract._id }),
+      FeedbackModel.deleteMany({ document: contract._id }),
+      DocumentModel.findByIdAndDelete(req.params.id),
+    ]);
+
+    recordAudit(req, {
+      action: "delete",
+      resourceType: "contract",
+      resourceId: contract._id,
+      summary: `Deleted "${contract.title}" and purged indexed vectors`,
+    });
+
+    res.json({ message: "Contract, clauses, Q&A history, and vector embeddings deleted." });
   } catch (error) {
     console.error("Delete contract error:", error);
     res.status(500).json({ message: "Failed to delete contract." });
   }
 });
 
-router.post("/:id/extract", protect, async (req, res) => {
+router.post("/:id/extract", protect, aiLimiter, async (req, res) => {
   let contract = null;
   try {
     contract = await loadOwnedContract(req.params.id, req.user._id, res);
@@ -435,7 +488,6 @@ router.post("/:id/extract", protect, async (req, res) => {
       await ClauseModel.insertMany(clausesToInsert);
     }
 
-    // Run executive summary + key-fact analysis (gracefully optional if AI analysis fails).
     let analysisData = null;
     try {
       const analyzeRes = await fetch(`${AI_SERVICE_URL()}/api/v1/analyze`, {
@@ -489,6 +541,13 @@ router.post("/:id/extract", protect, async (req, res) => {
     contract.extractedAt = new Date();
     await contract.save();
 
+    recordAudit(req, {
+      action: "extract",
+      resourceType: "contract",
+      resourceId: contract._id,
+      summary: `Analyzed "${contract.title}" (${clausesToInsert.length} clauses, risk score ${contract.riskSummary.score}/100)`,
+    });
+
     res.json({
       message: "Contract analyzed, clauses saved, and vectors indexed successfully.",
       savedClausesCount: clausesToInsert.length,
@@ -524,6 +583,78 @@ router.get("/:id/clauses", protect, async (req, res) => {
   } catch (error) {
     console.error("Get clauses error:", error);
     res.status(500).json({ message: "Failed to fetch contract clauses." });
+  }
+});
+
+router.get("/:id/risks", protect, async (req, res) => {
+  try {
+    const contract = await loadOwnedContract(req.params.id, req.user._id, res);
+    if (!contract) return;
+
+    const flaggedClauses = await ClauseModel.find({
+      document: contract._id,
+      riskLevel: { $in: ["high", "medium"] },
+    }).sort({ createdAt: 1 });
+
+    // Sort high risks ahead of medium risks.
+    flaggedClauses.sort((a, b) => (a.riskLevel === "high" ? -1 : 1) - (b.riskLevel === "high" ? -1 : 1));
+
+    res.json({
+      contractId: contract._id,
+      title: contract.title,
+      riskSummary: contract.riskSummary || { high: 0, medium: 0, low: 0, overallLevel: "low", score: 0 },
+      flaggedCount: flaggedClauses.length,
+      flaggedClauses,
+      missingClauses: contract.missingClauses || [],
+    });
+  } catch (error) {
+    console.error("Get contract risks error:", error);
+    res.status(500).json({ message: "Failed to fetch contract risk analysis." });
+  }
+});
+
+router.get("/:id/qa", protect, async (req, res) => {
+  try {
+    const contract = await loadOwnedContract(req.params.id, req.user._id, res);
+    if (!contract) return;
+
+    const history = await QuestionAnswerModel.find({
+      user: req.user._id,
+      document: contract._id,
+    })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+
+    const qaIds = history.map((item) => item._id);
+    const feedbacks = qaIds.length
+      ? await FeedbackModel.find({
+          user: req.user._id,
+          questionAnswer: { $in: qaIds },
+        }).lean()
+      : [];
+
+    const feedbackMap = new Map();
+    feedbacks.forEach((fb) => {
+      feedbackMap.set(fb.questionAnswer.toString(), {
+        rating: fb.rating,
+        comment: fb.comment,
+      });
+    });
+
+    const items = history.map((item) => ({
+      ...item,
+      feedback: feedbackMap.get(item._id.toString()) || null,
+    }));
+
+    res.json({
+      contractId: contract._id,
+      count: items.length,
+      history: items,
+    });
+  } catch (error) {
+    console.error("Get contract Q&A history error:", error);
+    res.status(500).json({ message: "Failed to fetch Q&A history." });
   }
 });
 
@@ -564,6 +695,13 @@ router.get("/:id/report", protect, async (req, res) => {
       .replace(/^_+|_+$/g, "")
       .slice(0, 60);
 
+    recordAudit(req, {
+      action: "export_report",
+      resourceType: "contract",
+      resourceId: contract._id,
+      summary: `Exported Markdown report for "${contract.title}"`,
+    });
+
     res.setHeader("Content-Type", "text/markdown; charset=utf-8");
     res.setHeader(
       "Content-Disposition",
@@ -576,7 +714,8 @@ router.get("/:id/report", protect, async (req, res) => {
   }
 });
 
-router.post("/:id/ask", protect, async (req, res) => {
+router.post("/:id/ask", protect, aiLimiter, async (req, res) => {
+  const startedAt = Date.now();
   try {
     const contract = await loadOwnedContract(req.params.id, req.user._id, res);
     if (!contract) return;
@@ -607,10 +746,33 @@ router.post("/:id/ask", protect, async (req, res) => {
     }
 
     const retrievalData = await aiResponse.json();
+    const latencyMs = Date.now() - startedAt;
+
+    const savedQa = await QuestionAnswerModel.create({
+      user: req.user._id,
+      document: contract._id,
+      query: query.trim(),
+      answer: retrievalData.answer || "",
+      citations: retrievalData.citations || [],
+      confidence: retrievalData.confidence || "NONE",
+      insufficientInformation: Boolean(retrievalData.insufficient_information),
+      provider: retrievalData.provider || "",
+      latencyMs,
+    }).catch(() => null);
+
+    recordAudit(req, {
+      action: "ask",
+      resourceType: "contract",
+      resourceId: contract._id,
+      summary: `Asked "${contract.title}": "${query.trim().slice(0, 65)}"`,
+    });
+
     res.json({
+      qaId: savedQa?._id || null,
       contractId: contract._id,
       contractTitle: contract.title,
       fileName: contract.fileName,
+      latencyMs,
       ...retrievalData,
     });
   } catch (error) {
