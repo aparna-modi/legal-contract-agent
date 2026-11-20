@@ -157,3 +157,38 @@ export const SparklesIcon = ({ size = 16, className }) => (
     <path d="M19 16l.9 2.1L22 19l-2.1.9L19 22l-.9-2.1L16 19l2.1-.9L19 16z" />
   </svg>
 );
+
+export const BarChartIcon = ({ size = 16, className }) => (
+  <svg {...baseProps(size, className)}>
+    <line x1="18" y1="20" x2="18" y2="10" />
+    <line x1="12" y1="20" x2="12" y2="4" />
+    <line x1="6" y1="20" x2="6" y2="14" />
+  </svg>
+);
+
+export const ThumbsUpIcon = ({ size = 15, className }) => (
+  <svg {...baseProps(size, className)}>
+    <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+  </svg>
+);
+
+export const ThumbsDownIcon = ({ size = 15, className }) => (
+  <svg {...baseProps(size, className)}>
+    <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" />
+  </svg>
+);
+
+export const PrinterIcon = ({ size = 16, className }) => (
+  <svg {...baseProps(size, className)}>
+    <polyline points="6 9 6 2 18 2 18 9" />
+    <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+    <rect x="6" y="14" width="12" height="8" />
+  </svg>
+);
+
+export const ClockIcon = ({ size = 15, className }) => (
+  <svg {...baseProps(size, className)}>
+    <circle cx="12" cy="12" r="10" />
+    <polyline points="12 6 12 12 16 14" />
+  </svg>
+);

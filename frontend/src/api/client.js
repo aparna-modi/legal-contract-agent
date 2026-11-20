@@ -47,6 +47,8 @@ export const contractsApi = {
     request("/api/contracts/upload", { method: "POST", token, body: formData, isFormData: true }),
   extract: (token, id) => request(`/api/contracts/${id}/extract`, { method: "POST", token }),
   clauses: (token, id) => request(`/api/contracts/${id}/clauses`, { token }),
+  risks: (token, id) => request(`/api/contracts/${id}/risks`, { token }),
+  qaHistory: (token, id) => request(`/api/contracts/${id}/qa`, { token }),
   summary: (token, id) => request(`/api/contracts/${id}/summary`, { token }),
   ask: (token, id, query) =>
     request(`/api/contracts/${id}/ask`, {
@@ -85,4 +87,13 @@ export const contractsApi = {
     link.remove();
     URL.revokeObjectURL(url);
   },
+};
+
+export const feedbackApi = {
+  submit: (token, payload) => request("/api/feedback", { method: "POST", token, body: payload }),
+  stats: (token) => request("/api/feedback/stats", { token }),
+};
+
+export const analyticsApi = {
+  overview: (token) => request("/api/analytics/overview", { token }),
 };

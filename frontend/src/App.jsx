@@ -4,6 +4,7 @@ import { BrandMark, LogOutIcon } from "./components/Icons";
 import Dashboard from "./pages/Dashboard";
 import UploadScreen from "./pages/UploadScreen";
 import Compare from "./pages/Compare";
+import Analytics from "./pages/Analytics";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 
@@ -54,6 +55,12 @@ function App() {
                 >
                   Compare
                 </NavLink>
+                <NavLink
+                  to="/analytics"
+                  className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
+                >
+                  Analytics
+                </NavLink>
               </nav>
             )}
           </div>
@@ -94,6 +101,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/upload" element={<UploadScreen />} />
           <Route path="/compare" element={<Compare />} />
+          <Route path="/analytics" element={<Analytics />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
         </Routes>

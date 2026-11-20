@@ -18,36 +18,44 @@ The project runs as three decoupled services:
 - **Executive summary & key facts**: Extracts parties, effective date, term/duration, payment terms, notice period, governing law, and primary obligations.
 - **Grounded Q&A & hallucination defense**: Combines dense retrieval (`gemini-embedding-001` / local fallback) with `LegalReranker`, prompt-injection-safe `<contract_excerpt>` delimiters, a calibrated confidence threshold, and structured JSON grounding verification so unsupported questions are explicitly refused.
 - **Contract-to-contract comparison**: Semantically aligns clauses between two analyzed contracts to identify modified, added, removed, and unchanged provisions with numeric/risk shift highlights.
-- **Report export & cascade delete**: One-click Markdown report download (`GET /api/contracts/:id/report`) and cascade deletion across disk, MongoDB, and ChromaDB.
+- **Analytics, Q&A history, feedback & audit trail**: Portfolio-wide risk distribution charts, recurring missing-clause tracking, persisted Q&A history with thumbs-up/thumbs-down feedback (`POST /api/feedback`), and an activity audit log (`GET /api/analytics/overview`).
+- **Report export, security hardening & cascade delete**: One-click Markdown (`GET /api/contracts/:id/report`) and print-to-PDF reports, `helmet` security headers and `express-rate-limit` throttling, plus cascade deletion across disk, MongoDB, and ChromaDB.
 
 ## Project Structure
 
 ```text
 legal-contract-agent/
 ├── ai-service/
+│   ├── eval/               # RAG retrieval, citation, faithfulness & risk benchmark
 │   ├── extractors/         # PDF, DOCX, TXT parsers + token chunking helpers
 │   ├── services/           # LLM client, embeddings, clause risk engine, analysis, ChromaDB, RAG retrieval
-│   ├── tests/              # Pytest unit and API tests
+│   ├── tests/              # Pytest unit, API, and benchmark tests
+│   ├── Dockerfile
 │   ├── main.py             # FastAPI endpoints
 │   └── requirements.txt
 ├── backend/
 │   ├── config/db.js        # MongoDB connection
-│   ├── middleware/         # JWT protect middleware
-│   ├── models/             # User, Document, Clause Mongoose models
-│   ├── routes/             # Auth and contract gateway endpoints
+│   ├── middleware/         # JWT auth + rate limiters
+│   ├── models/             # User, Document, Clause, QuestionAnswer, Feedback, AuditLog
+│   ├── routes/             # Auth, contracts, feedback, and analytics routes
+│   ├── utils/              # Audit trail helper
+│   ├── Dockerfile
 │   └── server.js
 ├── frontend/
+│   ├── Dockerfile
+│   ├── nginx.conf          # SPA routing + reverse proxy to backend
 │   └── src/
 │       ├── api/client.js   # Centralized fetch client
 │       ├── components/     # ContractDrawer, LibrarySearchModal, ConfirmDialog, Icons
 │       ├── context/        # AuthContext
-│       └── pages/          # Dashboard, UploadScreen, Compare, Login, Register
+│       └── pages/          # Dashboard, UploadScreen, Compare, Analytics, Login, Register
 ├── scripts/
 │   ├── start-all.bat       # Windows batch launcher
 │   ├── start-all.ps1       # PowerShell launcher
 │   ├── verify_pipeline.py  # Vector store isolation & retrieval check
 │   └── test_e2e.js         # Full-stack end-to-end test suite
-└── package.json            # Root scripts (concurrently dev + tests)
+├── docker-compose.yml      # Full 3-tier containerized deployment
+└── package.json            # Root scripts (concurrently dev, tests, RAG evaluation)
 ```
 
 ## Setup & Running Locally
@@ -92,13 +100,20 @@ npm run dev
 - Backend API: `http://localhost:5000`
 - AI Service Docs: `http://localhost:8000/docs`
 
-### Verification & Tests
+### Verification, Evaluation & Docker Deployment
 
 ```bash
 # Run pytest unit/API tests, ChromaDB pipeline check, and full-stack E2E tests
 npm test
 
+# Run the formal RAG & risk evaluation benchmark (Recall@3, MRR, citation accuracy, faithfulness, latency)
+npm run eval:rag
+npm run eval:rag:offline
+
 # Lint and build the frontend bundle
 npm run frontend:lint
 npm run frontend:build
+
+# Run all 3 services in Docker containers
+docker compose up --build
 ```
