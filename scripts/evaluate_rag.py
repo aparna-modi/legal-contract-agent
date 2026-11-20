@@ -99,7 +99,7 @@ def evaluate_retrieval(user_id: str, doc_id: str, top_k: int = 3) -> Dict[str, f
             use_reranker=True,
         )
         results = response.get("results", [])
-        retrieved_headings = [r.get("section_heading") or r.get("clause_type") for r in results]
+        retrieved_headings = [r.get("section") or r.get("section_heading") or r.get("clause_type") for r in results]
         matched_expected = expected.intersection(retrieved_headings)
 
         if matched_expected:
