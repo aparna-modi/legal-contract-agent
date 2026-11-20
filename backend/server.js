@@ -34,14 +34,17 @@ app.get("/", (req, res) => {
   });
 });
 
-app.get("/health", (req, res) => {
+const healthHandler = (req, res) => {
   res.json({
     status: "healthy",
     service: "Legal Contract Agent API",
     version: "1.3.0",
     database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
   });
-});
+};
+
+app.get("/health", healthHandler);
+app.get("/api/health", healthHandler);
 
 app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/contracts", contractRoutes);

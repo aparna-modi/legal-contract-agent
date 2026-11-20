@@ -2,25 +2,38 @@ services:
   ai-service:
     build:
       context: ./ai-service
-    container_name: legal-agent-ai
+      dockerfile: Dockerfile
+    container_name: legal-contract-ai
     ports:
       - "8000:8000"
     env_file:
-      - ./ai-service/.env
+      - path: ./ai-service/.env
+        required: false
+    environment:
+      - PORT=8000
     volumes:
       - chroma_data:/app/chroma_db
       - contract_uploads:/app/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   backend:
     build:
       context: ./backend
-    container_name: legal-agent-api
+      dockerfile: Dockerfile
+    container_name: legal-contract-backend
     ports:
       - "5000:5000"
     env_file:
-      - ./backend/.env
+      - path: ./backend/.env
+        required: false
     environment:
+      - NODE_ENV=production
+      - PORT=5000
       - AI_SERVICE_URL=http://ai-service:8000
     volumes:
       - contract_uploads:/app/uploads
@@ -32,9 +45,10 @@ services:
   frontend:
     build:
       context: ./frontend
+      dockerfile: Dockerfile
       args:
         VITE_API_URL: ""
-    container_name: legal-agent-web
+    container_name: legal-contract-frontend
     ports:
       - "5173:80"
     depends_on:
