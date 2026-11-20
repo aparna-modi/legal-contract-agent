@@ -2,6 +2,7 @@ import hashlib
 import math
 import os
 import re
+import time
 from typing import List, Optional
 
 import httpx
@@ -189,11 +190,21 @@ class EmbeddingService:
                     output_dimensionality=self.dimension,
                     task_type=task_type,
                 )
-                response = client.models.embed_content(
-                    model=self.model_name,
-                    contents=slice_texts,
-                    config=config,
-                )
+                response = None
+                for attempt in range(3):
+                    try:
+                        response = client.models.embed_content(
+                            model=self.model_name,
+                            contents=slice_texts,
+                            config=config,
+                        )
+                        break
+                    except Exception as call_exc:
+                        call_msg = str(call_exc).lower()
+                        if any(tok in call_msg for tok in ("429", "quota", "rate", "503", "unavailable", "timeout")) and attempt < 2:
+                            time.sleep(1.2 * (attempt + 1))
+                            continue
+                        raise
                 embeddings = getattr(response, "embeddings", None) or []
                 if len(embeddings) != len(slice_texts):
                     return None
