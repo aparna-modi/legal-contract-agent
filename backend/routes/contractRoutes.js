@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
@@ -8,151 +9,293 @@ const DocumentModel = require("../models/Document");
 const ClauseModel = require("../models/Clause");
 const QuestionAnswerModel = require("../models/QuestionAnswer");
 const FeedbackModel = require("../models/Feedback");
+const PlaybookModel = require("../models/Playbook");
 const { protect } = require("../middleware/authMiddleware");
-const { aiLimiter } = require("../middleware/rateLimiters");
+const { aiLimiter, uploadLimiter } = require("../middleware/rateLimiters");
 const { recordAudit } = require("../utils/audit");
+const { aiClient } = require("../utils/aiClient");
+const { storageService } = require("../utils/storage");
+const { extractionQueue } = require("../utils/jobQueue");
+const { cacheGetJson, cacheSetJson } = require("../utils/redisStore");
+const { validateFileMagicBytes } = require("../utils/security");
 
 const router = express.Router();
+const uploadDir = storageService.LOCAL_UPLOAD_DIR;
+fs.mkdirSync(uploadDir, { recursive: true });
 
-const AI_SERVICE_URL = () => process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
-
-const uploadDir = path.join(__dirname, "../uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const sanitized = file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_");
-    cb(null, `${Date.now()}-${sanitized}`);
-  },
-});
-
-const fileFilter = (req, file, cb) => {
-  const allowedExtensions = [".pdf", ".docx", ".txt"];
-  const ext = path.extname(file.originalname).toLowerCase();
-  if (allowedExtensions.includes(ext)) {
-    cb(null, true);
-  } else {
-    cb(new Error("Only .pdf, .docx, and .txt files are allowed."), false);
-  }
+const ALLOWED_EXT = [".pdf", ".docx", ".txt"];
+const MIME_MAP = {
+  pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  txt: "text/plain; charset=utf-8",
 };
 
 const upload = multer({
-  storage,
-  fileFilter,
+  storage: multer.diskStorage({
+    destination: (_, __, cb) => cb(null, uploadDir),
+    filename: (_, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_")}`),
+  }),
+  fileFilter: (_, file, cb) => {
+    const ok = ALLOWED_EXT.includes(path.extname(file.originalname).toLowerCase());
+    cb(ok ? null : new Error("Only .pdf, .docx, and .txt files are allowed."), ok);
+  },
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-async function loadOwnedContract(contractId, userId, res) {
-  if (!mongoose.Types.ObjectId.isValid(contractId)) {
+const unlinkSafe = (p) => { try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch {} };
+const stripPath = (doc) => { const o = doc.toObject ? doc.toObject() : { ...doc }; delete o.filePath; return o; };
+
+async function loadContract(id, user, res, { requireWrite = false } = {}) {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
     res.status(400).json({ message: "Invalid contract ID format." });
     return null;
   }
-
-  const contract = await DocumentModel.findById(contractId);
-  if (!contract) {
+  const doc = await DocumentModel.findById(id);
+  if (!doc) {
     res.status(404).json({ message: "Contract not found." });
     return null;
   }
+  const isOwner = doc.user.toString() === user._id.toString();
+  const isTeam = doc.visibility === "team" && doc.organization && user.organizationId &&
+    doc.organization.toString() === user.organizationId.toString();
 
-  if (contract.user.toString() !== userId.toString()) {
+  if (!isOwner && !isTeam) {
     res.status(403).json({ message: "Unauthorized access to this contract." });
     return null;
   }
-
-  return contract;
+  if (requireWrite && !isOwner && !["admin", "counsel"].includes(user.role)) {
+    res.status(403).json({ message: "Write access requires contract ownership or Counsel/Admin role." });
+    return null;
+  }
+  return doc;
 }
 
-function formatReportMarkdown(contract, clauses) {
-  const facts = contract.keyFacts || {};
-  const risk = contract.riskSummary || { high: 0, medium: 0, low: 0, overallLevel: "low", score: 0 };
-  const missing = contract.missingClauses || [];
+async function enqueueExtraction(contract, req, res) {
+  contract.status = "queued";
+  contract.jobProgress = { stage: "queued", percent: 5, message: "Queued for background extraction..." };
+  await contract.save();
+  const job = extractionQueue.enqueue({
+    contractId: contract._id,
+    userId: req.user._id,
+    taskFn: (onProgress) => runExtraction(contract, req, onProgress),
+  });
+  return res.status(202).json({ message: "Contract queued for asynchronous analysis.", jobId: job.id, job });
+}
 
+async function runExtraction(contract, req, onProgress = () => {}) {
+  contract.status = "processing";
+  contract.jobProgress = { stage: "extracting", percent: 20, message: "Reading contract from storage..." };
+  await contract.save();
+
+  const fileBuffer = await storageService.getBuffer({
+    storageProvider: contract.storageProvider || "local",
+    storageKey: contract.storageKey,
+    filePath: contract.filePath,
+  });
+
+  onProgress("extracting", 35, "Parsing pages, clauses, and embeddings on AI worker...");
+  const aiRes = await aiClient.extractContractFile({
+    buffer: fileBuffer,
+    fileName: contract.fileName,
+    title: contract.fileName || contract.title,
+    userId: contract.user.toString(),
+    documentId: contract._id.toString(),
+    requestId: req?.requestId || "",
+  });
+
+  if (!aiRes.ok) {
+    const errData = await aiRes.json().catch(() => ({}));
+    const detail = errData.detail || "AI service failed to parse contract.";
+    contract.status = "failed";
+    contract.jobProgress = { stage: "failed", percent: 100, message: detail };
+    await contract.save();
+    const err = new Error(detail);
+    err.status = aiRes.status;
+    throw err;
+  }
+
+  const ext = await aiRes.json();
+  const chunks = ext.chunks || [];
+
+  onProgress("analyzing", 70, "Synthesizing executive summary, plain-English clause explanations & Indian law references...");
+  let analysis = null;
+  try {
+    const res = await aiClient.request("/api/v1/analyze", {
+      method: "POST",
+      requestId: req?.requestId || "",
+      timeoutMs: 45000,
+      body: {
+        document_name: contract.title || contract.fileName,
+        full_text: ext.full_text || "",
+        classified_clauses: ext.classified_clauses || [],
+      },
+    });
+    if (res.ok) analysis = await res.json();
+  } catch (e) {
+    console.warn("Summary analysis skipped:", e.message);
+  }
+
+  onProgress("classifying", 85, "Saving classified legal clauses and explanations...");
+  await ClauseModel.deleteMany({ document: contract._id });
+
+  const expByIdx = new Map((analysis?.clause_explanations || []).map((e) => [e.index, e]));
+  const sourceList = ext.classified_clauses?.length
+    ? ext.classified_clauses
+    : chunks.filter((c) => c.text?.trim().length > 30);
+
+  const clauses = sourceList.map((c, idx) => {
+    const exp = expByIdx.get(idx);
+    return {
+      document: contract._id,
+      clauseType: (c.clause_type || c.section_heading || "General Provision").replace(/^\d+(?:\.\d+)*[.)]\s*/, "").trim() || "General Provision",
+      text: c.text,
+      pageNumber: c.page_number || 1,
+      sectionHeading: c.section_heading || "General",
+      riskLevel: c.risk_level || "low",
+      riskReason: c.risk_reason || (c.section_heading ? `Extracted under '${c.section_heading}'.` : "Standard contractual provision."),
+      plainEnglish: exp?.plain_english || c.plain_english || "",
+      indianLawRef: exp?.indian_law_ref || c.indian_law_ref || "",
+    };
+  });
+  if (clauses.length) await ClauseModel.insertMany(clauses);
+
+  const risk = analysis?.risk_summary || ext.risk_summary || {};
+  const missing = analysis?.missing_clauses || ext.missing_clauses || [];
+  const kf = analysis?.key_facts || {};
+
+  Object.assign(contract, {
+    status: "completed",
+    jobProgress: { stage: "completed", percent: 100, message: "Analysis complete." },
+    pageCount: ext.total_pages || 1,
+    totalTokens: ext.total_tokens || 0,
+    totalSections: ext.total_sections || 0,
+    ocrUsed: Boolean(ext.metadata?.ocr_used),
+    vectorIndexed: true,
+    vectorCount: chunks.length,
+    summary: analysis?.executive_summary || "",
+    analysisProvider: analysis?.provider || "",
+    keyFacts: {
+      parties: kf.parties || [],
+      effectiveDate: kf.effective_date || "Not specified",
+      expiryOrTerm: kf.expiry_or_term || "Not specified",
+      paymentTerms: kf.payment_terms || "Not specified",
+      noticePeriod: kf.notice_period || "Not specified",
+      governingLaw: kf.governing_law || "Not specified",
+      keyObligations: kf.key_obligations || [],
+    },
+    riskSummary: {
+      high: risk.high || 0,
+      medium: risk.medium || 0,
+      low: risk.low || 0,
+      overallLevel: risk.overall_level || "low",
+      score: risk.score || 0,
+    },
+    missingClauses: missing.map((m) => ({
+      clauseType: m.clause_type,
+      severity: m.severity || "medium",
+      reason: m.reason || "",
+    })),
+    extractedAt: new Date(),
+  });
+  await contract.save();
+
+  recordAudit(req, {
+    userId: req?.user?._id || contract.user,
+    action: "extract",
+    resourceType: "contract",
+    resourceId: contract._id,
+    summary: `Analyzed "${contract.title}" (${clauses.length} clauses, risk score ${contract.riskSummary.score}/100)`,
+  });
+
+  return {
+    savedClausesCount: clauses.length,
+    vectorsIndexedCount: chunks.length,
+    document: stripPath(contract),
+    analysis,
+    extraction: ext,
+  };
+}
+
+function buildReportMarkdown(contract, clauses) {
+  const f = contract.keyFacts || {};
+  const r = contract.riskSummary || { high: 0, medium: 0, low: 0, overallLevel: "low", score: 0 };
   const lines = [
     `# Contract Analysis Report: ${contract.title}`,
     "",
     `- **Source File:** ${contract.fileName}`,
     `- **Analyzed At:** ${contract.extractedAt ? new Date(contract.extractedAt).toISOString() : "N/A"}`,
     `- **Pages / Sections / Tokens:** ${contract.pageCount || 1} pages | ${contract.totalSections || 0} sections | ${contract.totalTokens || 0} tokens`,
-    `- **Overall Risk Rating:** ${(risk.overallLevel || "low").toUpperCase()} (${risk.score || 0}/100) — High: ${risk.high || 0}, Medium: ${risk.medium || 0}, Low: ${risk.low || 0}`,
+    `- **Overall Risk Rating:** ${(r.overallLevel || "low").toUpperCase()} (${r.score || 0}/100) — High: ${r.high || 0}, Medium: ${r.medium || 0}, Low: ${r.low || 0}`,
     "",
-    "> **Disclaimer:** This report is generated by an AI-assisted review tool and does not constitute formal legal advice.",
+    "> **Disclaimer:** Generated by an AI-assisted review tool and does not constitute formal legal advice.",
     "",
     "## Executive Summary",
     contract.summary || "No executive summary generated.",
     "",
     "## Key Facts",
-    `- **Parties:** ${Array.isArray(facts.parties) && facts.parties.length ? facts.parties.join(", ") : "Not specified"}`,
-    `- **Effective Date:** ${facts.effectiveDate || "Not specified"}`,
-    `- **Term / Expiry:** ${facts.expiryOrTerm || "Not specified"}`,
-    `- **Payment Terms:** ${facts.paymentTerms || "Not specified"}`,
-    `- **Notice Period:** ${facts.noticePeriod || "Not specified"}`,
-    `- **Governing Law:** ${facts.governingLaw || "Not specified"}`,
+    `- **Parties:** ${f.parties?.length ? f.parties.join(", ") : "Not specified"}`,
+    `- **Effective Date:** ${f.effectiveDate || "Not specified"}`,
+    `- **Term / Expiry:** ${f.expiryOrTerm || "Not specified"}`,
+    `- **Payment Terms:** ${f.paymentTerms || "Not specified"}`,
+    `- **Notice Period:** ${f.noticePeriod || "Not specified"}`,
+    `- **Governing Law:** ${f.governingLaw || "Not specified"}`,
     "",
   ];
-
-  if (Array.isArray(facts.keyObligations) && facts.keyObligations.length > 0) {
-    lines.push("## Key Obligations");
-    facts.keyObligations.forEach((ob) => lines.push(`- ${ob}`));
-    lines.push("");
+  if (f.keyObligations?.length) {
+    lines.push("## Key Obligations", ...f.keyObligations.map((o) => `- ${o}`), "");
   }
-
-  if (missing.length > 0) {
-    lines.push("## Missing Core Clauses");
-    missing.forEach((m) => {
-      lines.push(`- **${m.clauseType}** (${(m.severity || "medium").toUpperCase()}): ${m.reason}`);
-    });
-    lines.push("");
-  }
-
-  lines.push(`## Extracted Clauses (${clauses.length})`);
-  lines.push("");
-  clauses.forEach((clause, idx) => {
+  if (contract.missingClauses?.length) {
     lines.push(
-      `### ${idx + 1}. ${clause.clauseType} — ${(clause.riskLevel || "low").toUpperCase()} RISK`
+      "## Missing Core Clauses",
+      ...contract.missingClauses.map((m) => `- **${m.clauseType}** (${(m.severity || "medium").toUpperCase()}): ${m.reason}`),
+      ""
     );
-    lines.push(`- **Location:** Page ${clause.pageNumber || 1}, Section: ${clause.sectionHeading || "General"}`);
-    if (clause.riskReason) {
-      lines.push(`- **Assessment:** ${clause.riskReason}`);
-    }
-    lines.push("");
-    lines.push(`> ${String(clause.text || "").replace(/\n/g, "\n> ")}`);
-    lines.push("");
+  }
+  lines.push(`## Extracted Clauses (${clauses.length})`, "");
+  clauses.forEach((c, i) => {
+    lines.push(`### ${i + 1}. ${c.clauseType} — ${(c.riskLevel || "low").toUpperCase()} RISK`);
+    lines.push(`- **Location:** Page ${c.pageNumber || 1}, Section: ${c.sectionHeading || "General"}`);
+    if (c.plainEnglish) lines.push(`- **Plain-English Explanation:** ${c.plainEnglish}`);
+    if (c.indianLawRef) lines.push(`- **Applicable Indian Law:** ${c.indianLawRef}`);
+    if (c.riskReason) lines.push(`- **Risk Assessment:** ${c.riskReason}`);
+    lines.push("", `> ${String(c.text || "").replace(/\n/g, "\n> ")}`, "");
   });
-
   return lines.join("\n");
 }
 
-// --- Static routes first so they never collide with /:id ---
+// --- Static routes ---
 
-router.post("/upload", protect, (req, res) => {
+router.post("/upload", protect, uploadLimiter, (req, res) => {
   upload.single("contract")(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
-      if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(400).json({ message: "File size exceeds the 10MB limit." });
-      }
-      return res.status(400).json({ message: err.message });
+      return res.status(400).json({ message: err.code === "LIMIT_FILE_SIZE" ? "File size exceeds the 10MB limit." : err.message });
     }
-    if (err) {
-      return res.status(400).json({ message: err.message });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({ message: "No contract file was uploaded." });
-    }
+    if (err) return res.status(400).json({ message: err.message });
+    if (!req.file) return res.status(400).json({ message: "No contract file was uploaded." });
 
     try {
       const ext = path.extname(req.file.originalname).toLowerCase().replace(".", "");
-      const title =
-        req.body.title && req.body.title.trim() ? req.body.title.trim() : req.file.originalname;
+      const sig = validateFileMagicBytes(req.file.path, ext);
+      if (!sig.valid) {
+        unlinkSafe(req.file.path);
+        return res.status(400).json({ message: sig.message });
+      }
 
-      const newDoc = await DocumentModel.create({
+      const stored = await storageService.putObject({
+        key: `${req.user._id}/${path.basename(req.file.path)}`,
+        localPath: req.file.path,
+        contentType: req.file.mimetype || "application/octet-stream",
+      });
+
+      const doc = await DocumentModel.create({
         user: req.user._id,
-        title,
+        organization: req.user.organizationId || null,
+        visibility: req.body.visibility === "team" && req.user.organizationId ? "team" : "private",
+        title: req.body.title?.trim() ? req.body.title.trim().slice(0, 180) : req.file.originalname,
         fileName: req.file.originalname,
-        filePath: req.file.path,
+        filePath: stored.filePath || "",
+        storageProvider: stored.provider,
+        storageKey: stored.storageKey,
         fileType: ext,
         fileSize: req.file.size,
         status: "uploaded",
@@ -161,16 +304,14 @@ router.post("/upload", protect, (req, res) => {
       recordAudit(req, {
         action: "upload",
         resourceType: "contract",
-        resourceId: newDoc._id,
-        summary: `Uploaded "${newDoc.title}" (${ext.toUpperCase()})`,
+        resourceId: doc._id,
+        summary: `Uploaded "${doc.title}" (${ext.toUpperCase()}, ${stored.provider})`,
       });
 
-      res.status(201).json({
-        message: "Contract uploaded successfully.",
-        document: newDoc,
-      });
+      res.status(201).json({ message: "Contract uploaded successfully.", document: stripPath(doc) });
     } catch (error) {
-      console.error("Contract upload error:", error);
+      unlinkSafe(req.file?.path);
+      console.error("Contract upload error:", error.message);
       res.status(500).json({ message: "Failed to save contract metadata." });
     }
   });
@@ -178,118 +319,97 @@ router.post("/upload", protect, (req, res) => {
 
 router.get("/", protect, async (req, res) => {
   try {
-    const contracts = await DocumentModel.find({ user: req.user._id }).sort({ createdAt: -1 });
+    const filter = req.user.organizationId
+      ? { $or: [{ user: req.user._id }, { organization: req.user.organizationId, visibility: "team" }] }
+      : { user: req.user._id };
+    const contracts = await DocumentModel.find(filter).select("-filePath").sort({ createdAt: -1 });
     res.json({ contracts });
-  } catch (error) {
-    console.error("List contracts error:", error);
+  } catch (err) {
+    console.error("List contracts error:", err.message);
     res.status(500).json({ message: "Failed to fetch contracts." });
   }
 });
 
+router.get("/jobs/:jobId", protect, (req, res) => {
+  const job = extractionQueue.getJob(req.params.jobId, req.user._id);
+  return job ? res.json({ job }) : res.status(404).json({ message: "Extraction job not found." });
+});
+
 router.post("/search", protect, aiLimiter, async (req, res) => {
-  const startedAt = Date.now();
+  const started = Date.now();
   try {
-    const { query, top_k = 5, min_score = 0.20, use_reranker = true } = req.body;
-    if (!query || !query.trim()) {
-      return res.status(400).json({ message: "Search query is required." });
-    }
+    const { query, top_k = 5, min_score = 0.2, use_reranker = true } = req.body || {};
+    const q = String(query || "").trim().slice(0, 600);
+    if (!q) return res.status(400).json({ message: "Search query is required." });
 
-    const aiResponse = await fetch(`${AI_SERVICE_URL()}/api/v1/retrieve`, {
+    const aiRes = await aiClient.request("/api/v1/retrieve", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query: query.trim(),
+      requestId: req.requestId,
+      body: {
+        query: q,
         user_id: req.user._id.toString(),
-        top_k: Number(top_k),
-        min_score: Number(min_score),
+        top_k: Math.min(20, Math.max(1, Number(top_k) || 5)),
+        min_score: Math.min(1, Math.max(0, Number(min_score) || 0.2)),
         use_reranker: Boolean(use_reranker),
-      }),
+      },
     });
-
-    if (!aiResponse.ok) {
-      const errData = await aiResponse.json().catch(() => ({}));
-      return res.status(aiResponse.status).json({
-        message: errData.detail || "AI search request failed.",
-      });
+    if (!aiRes.ok) {
+      const err = await aiRes.json().catch(() => ({}));
+      return res.status(aiRes.status).json({ message: err.detail || "AI search request failed." });
     }
 
-    const searchData = await aiResponse.json();
-    const docIds = [...new Set((searchData.results || []).map((r) => r.document_id).filter(Boolean))];
-    const docs = await DocumentModel.find({ _id: { $in: docIds }, user: req.user._id }).select(
-      "title fileName"
-    );
-
-    const docMap = new Map();
-    docs.forEach((doc) => {
-      docMap.set(doc._id.toString(), { title: doc.title, fileName: doc.fileName });
-    });
-
-    if (searchData.results) {
-      searchData.results = searchData.results.map((r) => {
-        const meta = docMap.get(r.document_id);
-        return {
-          ...r,
-          contractTitle: meta?.title || "Contract Document",
-          fileName: meta?.fileName || "",
-        };
-      });
+    const data = await aiRes.json();
+    const ids = [...new Set((data.results || []).map((r) => r.document_id).filter(Boolean))];
+    const docs = await DocumentModel.find({ _id: { $in: ids }, user: req.user._id }).select("title fileName").lean();
+    const map = new Map(docs.map((d) => [d._id.toString(), d]));
+    if (data.results) {
+      data.results = data.results.map((r) => ({
+        ...r,
+        contractTitle: map.get(r.document_id)?.title || "Contract Document",
+        fileName: map.get(r.document_id)?.fileName || "",
+      }));
     }
 
-    const savedQa = await QuestionAnswerModel.create({
+    const qa = await QuestionAnswerModel.create({
       user: req.user._id,
       document: null,
-      query: query.trim(),
-      answer: searchData.answer || "",
-      citations: searchData.citations || [],
-      confidence: searchData.confidence || "NONE",
-      insufficientInformation: Boolean(searchData.insufficient_information),
-      provider: searchData.provider || "",
-      latencyMs: Date.now() - startedAt,
+      query: q,
+      answer: data.answer || "",
+      citations: data.citations || [],
+      confidence: data.confidence || "NONE",
+      insufficientInformation: Boolean(data.insufficient_information),
+      provider: data.provider || "",
+      latencyMs: Date.now() - started,
     }).catch(() => null);
 
-    recordAudit(req, {
-      action: "search",
-      resourceType: "library",
-      summary: `Searched library: "${query.trim().slice(0, 70)}"`,
-    });
-
-    res.json({
-      qaId: savedQa?._id || null,
-      ...searchData,
-    });
-  } catch (error) {
-    console.error("Library search error:", error);
-    res.status(500).json({ message: "Failed to search contract library.", error: error.message });
+    recordAudit(req, { action: "search", resourceType: "library", summary: `Searched library: "${q.slice(0, 70)}"` });
+    res.json({ qaId: qa?._id || null, ...data });
+  } catch (err) {
+    console.error("Library search error:", err.message);
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to search contract library." });
   }
 });
 
 router.post("/compare", protect, aiLimiter, async (req, res) => {
   try {
-    const { contractAId, contractBId } = req.body;
-    if (!contractAId || !contractBId) {
-      return res.status(400).json({ message: "Both contractAId and contractBId are required." });
-    }
-    if (contractAId === contractBId) {
-      return res.status(400).json({ message: "Select two different contracts to compare." });
-    }
+    const { contractAId, contractBId } = req.body || {};
+    if (!contractAId || !contractBId) return res.status(400).json({ message: "Both contractAId and contractBId are required." });
+    if (contractAId === contractBId) return res.status(400).json({ message: "Select two different contracts to compare." });
 
-    const contractA = await loadOwnedContract(contractAId, req.user._id, res);
+    const contractA = await loadContract(contractAId, req.user, res);
     if (!contractA) return;
-    const contractB = await loadOwnedContract(contractBId, req.user._id, res);
+    const contractB = await loadContract(contractBId, req.user, res);
     if (!contractB) return;
 
     const [clausesA, clausesB] = await Promise.all([
       ClauseModel.find({ document: contractA._id }).sort({ createdAt: 1 }).lean(),
       ClauseModel.find({ document: contractB._id }).sort({ createdAt: 1 }).lean(),
     ]);
-
-    if (clausesA.length === 0 || clausesB.length === 0) {
-      return res.status(400).json({
-        message: "Both contracts must be analyzed before comparing them.",
-      });
+    if (!clausesA.length || !clausesB.length) {
+      return res.status(400).json({ message: "Both contracts must be analyzed before comparing them." });
     }
 
-    const mapClause = (c) => ({
+    const toPayload = (c) => ({
       clause_type: c.clauseType,
       text: c.text,
       risk_level: c.riskLevel,
@@ -298,97 +418,144 @@ router.post("/compare", protect, aiLimiter, async (req, res) => {
       section_heading: c.sectionHeading || "General",
     });
 
-    const aiResponse = await fetch(`${AI_SERVICE_URL()}/api/v1/compare`, {
+    const aiRes = await aiClient.request("/api/v1/compare", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      requestId: req.requestId,
+      timeoutMs: 60000,
+      body: {
         contract_a_title: contractA.title || contractA.fileName,
-        clauses_a: clausesA.map(mapClause),
+        clauses_a: clausesA.map(toPayload),
         contract_b_title: contractB.title || contractB.fileName,
-        clauses_b: clausesB.map(mapClause),
-      }),
+        clauses_b: clausesB.map(toPayload),
+      },
     });
-
-    if (!aiResponse.ok) {
-      const errData = await aiResponse.json().catch(() => ({}));
-      return res.status(aiResponse.status).json({
-        message: errData.detail || "AI service failed to compare contracts.",
-      });
+    if (!aiRes.ok) {
+      const err = await aiRes.json().catch(() => ({}));
+      return res.status(aiRes.status).json({ message: err.detail || "AI service failed to compare contracts." });
     }
 
-    const comparison = await aiResponse.json();
-
+    const comparison = await aiRes.json();
     recordAudit(req, {
       action: "compare",
       resourceType: "comparison",
       resourceId: `${contractA._id}:${contractB._id}`,
       summary: `Compared "${contractA.title}" vs "${contractB.title}"`,
     });
-
-    res.json({
-      contractAId: contractA._id,
-      contractBId: contractB._id,
-      ...comparison,
-    });
-  } catch (error) {
-    console.error("Contract comparison error:", error);
-    res.status(500).json({ message: "Failed to compare contracts.", error: error.message });
+    res.json({ contractAId: contractA._id, contractBId: contractB._id, ...comparison });
+  } catch (err) {
+    console.error("Contract comparison error:", err.message);
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to compare contracts." });
   }
 });
 
 router.get("/stats/vectors", protect, async (req, res) => {
   try {
-    const aiResponse = await fetch(
-      `${AI_SERVICE_URL()}/api/v1/vector/stats?user_id=${req.user._id.toString()}`
-    );
-    if (!aiResponse.ok) {
-      return res.status(502).json({ message: "Vector store service unavailable." });
-    }
-    const stats = await aiResponse.json();
-    res.json(stats);
-  } catch (error) {
-    res.status(500).json({ message: "Failed to retrieve vector stats.", error: error.message });
+    const aiRes = await aiClient.request(`/api/v1/vector/stats?user_id=${encodeURIComponent(req.user._id)}`, {
+      requestId: req.requestId,
+      timeoutMs: 8000,
+    });
+    return aiRes.ok ? res.json(await aiRes.json()) : res.status(502).json({ message: "Vector store service unavailable." });
+  } catch (err) {
+    res.status(err?.status || 500).json({ message: "Failed to retrieve vector stats." });
   }
 });
 
-// --- Parameterized contract routes ---
+// --- Parameterized routes ---
 
 router.get("/:id", protect, async (req, res) => {
   try {
-    const contract = await loadOwnedContract(req.params.id, req.user._id, res);
-    if (!contract) return;
-    res.json({ contract });
-  } catch (error) {
-    console.error("Get contract error:", error);
+    const contract = await loadContract(req.params.id, req.user, res);
+    if (contract) res.json({ contract: stripPath(contract) });
+  } catch (err) {
+    console.error("Get contract error:", err.message);
     res.status(500).json({ message: "Failed to fetch contract." });
   }
 });
 
+router.patch("/:id/visibility", protect, async (req, res) => {
+  try {
+    const contract = await loadContract(req.params.id, req.user, res, { requireWrite: true });
+    if (!contract) return;
+    const { visibility } = req.body || {};
+    if (!["private", "team"].includes(visibility)) return res.status(400).json({ message: "Visibility must be 'private' or 'team'." });
+    if (visibility === "team" && !req.user.organizationId) {
+      return res.status(400).json({ message: "Join or initialize a team workspace before sharing contracts." });
+    }
+    contract.visibility = visibility;
+    if (visibility === "team") contract.organization = req.user.organizationId;
+    await contract.save();
+    recordAudit(req, { action: "visibility_updated", resourceType: "contract", resourceId: contract._id, summary: `Set "${contract.title}" visibility to ${visibility.toUpperCase()}` });
+    res.json({ message: `Contract visibility updated to ${visibility}.`, visibility });
+  } catch (err) {
+    console.error("Visibility update error:", err.message);
+    res.status(500).json({ message: "Failed to update contract visibility." });
+  }
+});
+
+router.get("/:id/file", protect, async (req, res) => {
+  try {
+    const contract = await loadContract(req.params.id, req.user, res);
+    if (!contract) return;
+    const buf = await storageService.getBuffer({
+      storageProvider: contract.storageProvider || "local",
+      storageKey: contract.storageKey,
+      filePath: contract.filePath,
+    });
+    res.setHeader("Content-Type", MIME_MAP[contract.fileType] || "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(contract.fileName)}"`);
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.send(buf);
+  } catch (err) {
+    console.error("Stream contract file error:", err.message);
+    res.status(err?.status || 500).json({ message: "Failed to retrieve contract file." });
+  }
+});
+
+router.get("/:id/events", protect, async (req, res) => {
+  const contract = await loadContract(req.params.id, req.user, res);
+  if (!contract) return;
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  res.write(`data: ${JSON.stringify({
+    contractId: contract._id,
+    status: contract.status,
+    stage: contract.jobProgress?.stage || contract.status,
+    percent: contract.jobProgress?.percent || (contract.status === "completed" ? 100 : 0),
+    message: contract.jobProgress?.message || "",
+  })}\n\n`);
+
+  const keepAlive = setInterval(() => res.write(": keepalive\n\n"), 15000);
+  const unsub = extractionQueue.subscribe(contract._id.toString(), (payload) => {
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    if (["completed", "failed"].includes(payload.status)) {
+      clearInterval(keepAlive);
+      unsub();
+      res.end();
+    }
+  });
+  req.on("close", () => { clearInterval(keepAlive); unsub(); });
+});
+
 router.delete("/:id", protect, async (req, res) => {
   try {
-    const contract = await loadOwnedContract(req.params.id, req.user._id, res);
+    const contract = await loadContract(req.params.id, req.user, res, { requireWrite: true });
     if (!contract) return;
 
-    if (contract.filePath && fs.existsSync(contract.filePath)) {
-      try {
-        fs.unlinkSync(contract.filePath);
-      } catch (fileErr) {
-        console.warn("Could not delete uploaded file:", fileErr.message);
-      }
-    }
-
-    try {
-      await fetch(`${AI_SERVICE_URL()}/api/v1/vector/delete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: req.user._id.toString(),
-          document_id: contract._id.toString(),
-        }),
-      });
-    } catch (vErr) {
-      console.warn("Could not purge vectors from ChromaDB:", vErr.message);
-    }
+    await storageService.deleteObject({
+      storageProvider: contract.storageProvider || "local",
+      storageKey: contract.storageKey,
+      filePath: contract.filePath,
+    });
+    await aiClient.request("/api/v1/vector/delete", {
+      method: "POST",
+      requestId: req.requestId,
+      timeoutMs: 10000,
+      body: { user_id: contract.user.toString(), document_id: contract._id.toString() },
+    }).catch((e) => console.warn("Vector purge skipped:", e.message));
 
     await Promise.all([
       ClauseModel.deleteMany({ document: contract._id }),
@@ -396,391 +563,240 @@ router.delete("/:id", protect, async (req, res) => {
       FeedbackModel.deleteMany({ document: contract._id }),
       DocumentModel.findByIdAndDelete(req.params.id),
     ]);
-
-    recordAudit(req, {
-      action: "delete",
-      resourceType: "contract",
-      resourceId: contract._id,
-      summary: `Deleted "${contract.title}" and purged indexed vectors`,
-    });
-
+    recordAudit(req, { action: "delete", resourceType: "contract", resourceId: contract._id, summary: `Deleted "${contract.title}" and purged indexed vectors` });
     res.json({ message: "Contract, clauses, Q&A history, and vector embeddings deleted." });
-  } catch (error) {
-    console.error("Delete contract error:", error);
+  } catch (err) {
+    console.error("Delete contract error:", err.message);
     res.status(500).json({ message: "Failed to delete contract." });
+  }
+});
+
+router.post("/:id/extract-async", protect, aiLimiter, async (req, res) => {
+  try {
+    const contract = await loadContract(req.params.id, req.user, res, { requireWrite: true });
+    if (contract) await enqueueExtraction(contract, req, res);
+  } catch (err) {
+    console.error("Async extraction enqueue error:", err.message);
+    res.status(500).json({ message: "Failed to enqueue contract analysis." });
   }
 });
 
 router.post("/:id/extract", protect, aiLimiter, async (req, res) => {
   let contract = null;
   try {
-    contract = await loadOwnedContract(req.params.id, req.user._id, res);
+    contract = await loadContract(req.params.id, req.user, res, { requireWrite: true });
     if (!contract) return;
-
-    if (!contract.filePath || !fs.existsSync(contract.filePath)) {
-      return res.status(404).json({ message: "Uploaded contract file not found on disk." });
-    }
-
-    contract.status = "processing";
-    await contract.save();
-
-    const aiResponse = await fetch(`${AI_SERVICE_URL()}/api/v1/extract-path`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        file_path: contract.filePath,
-        title: contract.fileName || contract.title,
-        embed: true,
-        user_id: req.user._id.toString(),
-        document_id: contract._id.toString(),
-        index_vector: true,
-      }),
-    });
-
-    if (!aiResponse.ok) {
-      const errorData = await aiResponse.json().catch(() => ({}));
-      contract.status = "failed";
-      await contract.save();
-      return res.status(aiResponse.status).json({
-        message: errorData.detail || "AI service failed to parse contract.",
-      });
-    }
-
-    const extractionResult = await aiResponse.json();
-    const chunks = extractionResult.chunks || [];
-
-    await ClauseModel.deleteMany({ document: contract._id });
-
-    let clausesToInsert = [];
-    if (extractionResult.classified_clauses && extractionResult.classified_clauses.length > 0) {
-      clausesToInsert = extractionResult.classified_clauses.map((c) => ({
-        document: contract._id,
-        clauseType: c.clause_type || "General Provision",
-        text: c.text,
-        pageNumber: c.page_number || 1,
-        sectionHeading: c.section_heading || "General",
-        riskLevel: c.risk_level || "low",
-        riskReason: c.risk_reason || "Standard contractual provision.",
-      }));
-    } else {
-      clausesToInsert = chunks
-        .filter((chunk) => chunk.text && chunk.text.trim().length > 30)
-        .map((chunk) => {
-          let clauseType = chunk.clause_type || chunk.section_heading || "General Provision";
-          clauseType = clauseType.replace(/^\d+(?:\.\d+)*[\.\)]\s*/, "").trim() || "General Provision";
-          return {
-            document: contract._id,
-            clauseType,
-            text: chunk.text,
-            pageNumber: chunk.page_number || 1,
-            sectionHeading: chunk.section_heading || "General",
-            riskLevel: chunk.risk_level || "low",
-            riskReason:
-              chunk.risk_reason ||
-              (chunk.section_heading
-                ? `Extracted under '${chunk.section_heading}'.`
-                : "Standard agreement clause."),
-          };
-        });
-    }
-
-    if (clausesToInsert.length > 0) {
-      await ClauseModel.insertMany(clausesToInsert);
-    }
-
-    let analysisData = null;
-    try {
-      const analyzeRes = await fetch(`${AI_SERVICE_URL()}/api/v1/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          document_name: contract.title || contract.fileName,
-          full_text: extractionResult.full_text || "",
-          classified_clauses: extractionResult.classified_clauses || [],
-        }),
-      });
-      if (analyzeRes.ok) {
-        analysisData = await analyzeRes.json();
-      }
-    } catch (analysisErr) {
-      console.warn("Summary analysis skipped:", analysisErr.message);
-    }
-
-    const riskSource = analysisData?.risk_summary || extractionResult.risk_summary || {};
-    const missingSource = analysisData?.missing_clauses || extractionResult.missing_clauses || [];
-
-    contract.status = "completed";
-    contract.pageCount = extractionResult.total_pages || 1;
-    contract.totalTokens = extractionResult.total_tokens || 0;
-    contract.totalSections = extractionResult.total_sections || 0;
-    contract.vectorIndexed = true;
-    contract.vectorCount = chunks.length;
-    contract.summary = analysisData?.executive_summary || "";
-    contract.analysisProvider = analysisData?.provider || "";
-    contract.keyFacts = {
-      parties: analysisData?.key_facts?.parties || [],
-      effectiveDate: analysisData?.key_facts?.effective_date || "Not specified",
-      expiryOrTerm: analysisData?.key_facts?.expiry_or_term || "Not specified",
-      paymentTerms: analysisData?.key_facts?.payment_terms || "Not specified",
-      noticePeriod: analysisData?.key_facts?.notice_period || "Not specified",
-      governingLaw: analysisData?.key_facts?.governing_law || "Not specified",
-      keyObligations: analysisData?.key_facts?.key_obligations || [],
-    };
-    contract.riskSummary = {
-      high: riskSource.high || 0,
-      medium: riskSource.medium || 0,
-      low: riskSource.low || 0,
-      overallLevel: riskSource.overall_level || "low",
-      score: riskSource.score || 0,
-    };
-    contract.missingClauses = missingSource.map((m) => ({
-      clauseType: m.clause_type,
-      severity: m.severity || "medium",
-      reason: m.reason || "",
-    }));
-    contract.extractedAt = new Date();
-    await contract.save();
-
-    recordAudit(req, {
-      action: "extract",
-      resourceType: "contract",
-      resourceId: contract._id,
-      summary: `Analyzed "${contract.title}" (${clausesToInsert.length} clauses, risk score ${contract.riskSummary.score}/100)`,
-    });
-
-    res.json({
-      message: "Contract analyzed, clauses saved, and vectors indexed successfully.",
-      savedClausesCount: clausesToInsert.length,
-      vectorsIndexedCount: chunks.length,
-      document: contract,
-      analysis: analysisData,
-      extraction: extractionResult,
-    });
-  } catch (error) {
-    console.error("AI extraction error:", error);
-    if (contract) {
+    if (req.query.async === "true") return await enqueueExtraction(contract, req, res);
+    const result = await runExtraction(contract, req);
+    res.json({ message: "Contract analyzed, clauses saved, and vectors indexed successfully.", ...result });
+  } catch (err) {
+    console.error("AI extraction error:", err.message);
+    if (contract && contract.status !== "failed") {
       contract.status = "failed";
       await contract.save().catch(() => {});
     }
-    res.status(500).json({
-      message: "Failed to communicate with AI service. Ensure ai-service is running on port 8000.",
+    res.status(err?.status || 500).json({
+      message: [404, 503].includes(err?.status) ? err.message : "Failed to communicate with AI service. Ensure ai-service is healthy.",
     });
   }
 });
 
 router.get("/:id/clauses", protect, async (req, res) => {
   try {
-    const contract = await loadOwnedContract(req.params.id, req.user._id, res);
+    const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
-
     const clauses = await ClauseModel.find({ document: contract._id }).sort({ createdAt: 1 });
-    res.json({
-      contractId: contract._id,
-      title: contract.title,
-      count: clauses.length,
-      clauses,
-    });
-  } catch (error) {
-    console.error("Get clauses error:", error);
+    res.json({ contractId: contract._id, title: contract.title, count: clauses.length, clauses });
+  } catch (err) {
+    console.error("Get clauses error:", err.message);
     res.status(500).json({ message: "Failed to fetch contract clauses." });
+  }
+});
+
+router.post("/:id/clauses/:clauseId/suggest-redline", protect, aiLimiter, async (req, res) => {
+  try {
+    const contract = await loadContract(req.params.id, req.user, res);
+    if (!contract) return;
+    if (!mongoose.Types.ObjectId.isValid(req.params.clauseId)) return res.status(400).json({ message: "Invalid clause ID." });
+
+    const clause = await ClauseModel.findOne({ _id: req.params.clauseId, document: contract._id });
+    if (!clause) return res.status(404).json({ message: "Clause not found." });
+
+    const pb = await PlaybookModel.findOne(
+      req.user.organizationId ? { $or: [{ organization: req.user.organizationId }, { user: req.user._id }] } : { user: req.user._id }
+    ).lean();
+    const matchedRule = (pb?.rules || []).find((r) =>
+      r.enabled && r.guidance && (
+        clause.clauseType.toLowerCase().includes(r.target.toLowerCase()) ||
+        r.name.toLowerCase().includes(clause.clauseType.toLowerCase())
+      )
+    );
+
+    const aiRes = await aiClient.request("/api/v1/redline", {
+      method: "POST",
+      requestId: req.requestId,
+      body: {
+        clause_type: clause.clauseType,
+        clause_text: clause.text,
+        risk_level: clause.riskLevel || "medium",
+        risk_reason: clause.riskReason || "",
+        playbook_guidance: matchedRule?.guidance || "",
+      },
+    });
+    if (!aiRes.ok) {
+      const err = await aiRes.json().catch(() => ({}));
+      return res.status(aiRes.status).json({ message: err.detail || "Could not draft redline." });
+    }
+
+    const suggestion = await aiRes.json();
+    recordAudit(req, {
+      action: "redline_suggested",
+      resourceType: "clause",
+      resourceId: clause._id,
+      summary: `Generated fallback redline for "${clause.clauseType}" in "${contract.title}"`,
+    });
+    res.json({ clauseId: clause._id, ...suggestion });
+  } catch (err) {
+    console.error("Redline suggestion error:", err.message);
+    res.status(err?.status || 500).json({ message: "Failed to generate clause redline suggestion." });
   }
 });
 
 router.get("/:id/risks", protect, async (req, res) => {
   try {
-    const contract = await loadOwnedContract(req.params.id, req.user._id, res);
+    const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
-
-    const flaggedClauses = await ClauseModel.find({
-      document: contract._id,
-      riskLevel: { $in: ["high", "medium"] },
-    }).sort({ createdAt: 1 });
-
-    // Sort high risks ahead of medium risks.
-    flaggedClauses.sort((a, b) => (a.riskLevel === "high" ? -1 : 1) - (b.riskLevel === "high" ? -1 : 1));
-
+    const flagged = await ClauseModel.find({ document: contract._id, riskLevel: { $in: ["high", "medium"] } }).sort({ createdAt: 1 });
+    flagged.sort((a, b) => (a.riskLevel === "high" ? -1 : 1) - (b.riskLevel === "high" ? -1 : 1));
     res.json({
       contractId: contract._id,
       title: contract.title,
       riskSummary: contract.riskSummary || { high: 0, medium: 0, low: 0, overallLevel: "low", score: 0 },
-      flaggedCount: flaggedClauses.length,
-      flaggedClauses,
+      flaggedCount: flagged.length,
+      flaggedClauses: flagged,
       missingClauses: contract.missingClauses || [],
     });
-  } catch (error) {
-    console.error("Get contract risks error:", error);
+  } catch (err) {
+    console.error("Get contract risks error:", err.message);
     res.status(500).json({ message: "Failed to fetch contract risk analysis." });
   }
 });
 
 router.get("/:id/qa", protect, async (req, res) => {
   try {
-    const contract = await loadOwnedContract(req.params.id, req.user._id, res);
+    const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
-
-    const history = await QuestionAnswerModel.find({
-      user: req.user._id,
-      document: contract._id,
-    })
-      .sort({ createdAt: -1 })
-      .limit(20)
-      .lean();
-
-    const qaIds = history.map((item) => item._id);
-    const feedbacks = qaIds.length
-      ? await FeedbackModel.find({
-          user: req.user._id,
-          questionAnswer: { $in: qaIds },
-        }).lean()
+    const history = await QuestionAnswerModel.find({ user: req.user._id, document: contract._id }).sort({ createdAt: -1 }).limit(20).lean();
+    const fbs = history.length
+      ? await FeedbackModel.find({ user: req.user._id, questionAnswer: { $in: history.map((h) => h._id) } }).lean()
       : [];
-
-    const feedbackMap = new Map();
-    feedbacks.forEach((fb) => {
-      feedbackMap.set(fb.questionAnswer.toString(), {
-        rating: fb.rating,
-        comment: fb.comment,
-      });
-    });
-
-    const items = history.map((item) => ({
-      ...item,
-      feedback: feedbackMap.get(item._id.toString()) || null,
-    }));
-
-    res.json({
-      contractId: contract._id,
-      count: items.length,
-      history: items,
-    });
-  } catch (error) {
-    console.error("Get contract Q&A history error:", error);
+    const fbMap = new Map(fbs.map((f) => [f.questionAnswer.toString(), { rating: f.rating, comment: f.comment }]));
+    const items = history.map((h) => ({ ...h, feedback: fbMap.get(h._id.toString()) || null }));
+    res.json({ contractId: contract._id, count: items.length, history: items });
+  } catch (err) {
+    console.error("Get Q&A history error:", err.message);
     res.status(500).json({ message: "Failed to fetch Q&A history." });
   }
 });
 
 router.get("/:id/summary", protect, async (req, res) => {
   try {
-    const contract = await loadOwnedContract(req.params.id, req.user._id, res);
+    const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
-
     const clauseCount = await ClauseModel.countDocuments({ document: contract._id });
     res.json({
-      contract,
+      contract: stripPath(contract),
       metrics: {
         clauseCount,
         pageCount: contract.pageCount || 1,
         totalTokens: contract.totalTokens || 0,
         totalSections: contract.totalSections || 0,
-        vectorIndexed: contract.vectorIndexed || false,
+        ocrUsed: Boolean(contract.ocrUsed),
+        vectorIndexed: Boolean(contract.vectorIndexed),
         vectorCount: contract.vectorCount || 0,
         status: contract.status,
         riskSummary: contract.riskSummary,
       },
     });
-  } catch (error) {
-    console.error("Get contract summary error:", error);
+  } catch (err) {
+    console.error("Get summary error:", err.message);
     res.status(500).json({ message: "Failed to fetch contract summary." });
   }
 });
 
 router.get("/:id/report", protect, async (req, res) => {
   try {
-    const contract = await loadOwnedContract(req.params.id, req.user._id, res);
+    const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
-
     const clauses = await ClauseModel.find({ document: contract._id }).sort({ createdAt: 1 });
-    const markdown = formatReportMarkdown(contract, clauses);
-    const safeName = (contract.title || "contract")
-      .replace(/[^a-zA-Z0-9_-]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, 60);
-
-    recordAudit(req, {
-      action: "export_report",
-      resourceType: "contract",
-      resourceId: contract._id,
-      summary: `Exported Markdown report for "${contract.title}"`,
-    });
-
+    const safeName = (contract.title || "contract").replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "contract";
+    recordAudit(req, { action: "export_report", resourceType: "contract", resourceId: contract._id, summary: `Exported Markdown report for "${contract.title}"` });
     res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${safeName || "contract"}_analysis_report.md"`
-    );
-    res.send(markdown);
-  } catch (error) {
-    console.error("Report generation error:", error);
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}_analysis_report.md"`);
+    res.send(buildReportMarkdown(contract, clauses));
+  } catch (err) {
+    console.error("Report generation error:", err.message);
     res.status(500).json({ message: "Failed to generate analysis report." });
   }
 });
 
 router.post("/:id/ask", protect, aiLimiter, async (req, res) => {
-  const startedAt = Date.now();
+  const started = Date.now();
   try {
-    const contract = await loadOwnedContract(req.params.id, req.user._id, res);
+    const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
+    const { query, top_k = 5, min_score = 0.25, use_reranker = true } = req.body || {};
+    const q = String(query || "").trim().slice(0, 600);
+    if (!q) return res.status(400).json({ message: "Question query is required." });
 
-    const { query, top_k = 5, min_score = 0.25, use_reranker = true } = req.body;
-    if (!query || !query.trim()) {
-      return res.status(400).json({ message: "Question query is required." });
-    }
+    const kVal = Math.min(20, Math.max(1, Number(top_k) || 5));
+    const minVal = Math.min(1, Math.max(0, Number(min_score) || 0.25));
+    const rerank = Boolean(use_reranker);
+    const qHash = crypto.createHash("sha256").update(q.toLowerCase()).digest("hex").slice(0, 16);
+    const cacheKey = `qa:${contract._id}:${contract.extractedAt ? new Date(contract.extractedAt).getTime() : 0}:${qHash}:${kVal}:${minVal}:${rerank}`;
 
-    const aiResponse = await fetch(`${AI_SERVICE_URL()}/api/v1/retrieve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query: query.trim(),
-        user_id: req.user._id.toString(),
-        document_id: contract._id.toString(),
-        top_k: Number(top_k),
-        min_score: Number(min_score),
-        use_reranker: Boolean(use_reranker),
-      }),
-    });
+    let data = await cacheGetJson(cacheKey);
+    const cached = Boolean(data);
 
-    if (!aiResponse.ok) {
-      const errData = await aiResponse.json().catch(() => ({}));
-      return res.status(aiResponse.status).json({
-        message: errData.detail || "AI retrieval request failed.",
+    if (!data) {
+      const aiRes = await aiClient.request("/api/v1/retrieve", {
+        method: "POST",
+        requestId: req.requestId,
+        body: {
+          query: q,
+          user_id: contract.user.toString(),
+          document_id: contract._id.toString(),
+          top_k: kVal,
+          min_score: minVal,
+          use_reranker: rerank,
+        },
       });
+      if (!aiRes.ok) {
+        const err = await aiRes.json().catch(() => ({}));
+        return res.status(aiRes.status).json({ message: err.detail || "AI retrieval request failed." });
+      }
+      data = await aiRes.json();
+      await cacheSetJson(cacheKey, data, 600);
     }
 
-    const retrievalData = await aiResponse.json();
-    const latencyMs = Date.now() - startedAt;
-
-    const savedQa = await QuestionAnswerModel.create({
+    const latencyMs = Date.now() - started;
+    const qa = await QuestionAnswerModel.create({
       user: req.user._id,
       document: contract._id,
-      query: query.trim(),
-      answer: retrievalData.answer || "",
-      citations: retrievalData.citations || [],
-      confidence: retrievalData.confidence || "NONE",
-      insufficientInformation: Boolean(retrievalData.insufficient_information),
-      provider: retrievalData.provider || "",
+      query: q,
+      answer: data.answer || "",
+      citations: data.citations || [],
+      confidence: data.confidence || "NONE",
+      insufficientInformation: Boolean(data.insufficient_information),
+      provider: data.provider || "",
       latencyMs,
     }).catch(() => null);
 
-    recordAudit(req, {
-      action: "ask",
-      resourceType: "contract",
-      resourceId: contract._id,
-      summary: `Asked "${contract.title}": "${query.trim().slice(0, 65)}"`,
-    });
-
-    res.json({
-      qaId: savedQa?._id || null,
-      contractId: contract._id,
-      contractTitle: contract.title,
-      fileName: contract.fileName,
-      latencyMs,
-      ...retrievalData,
-    });
-  } catch (error) {
-    console.error("Contract Q&A error:", error);
-    res.status(500).json({
-      message: "Failed to run contract Q&A.",
-      error: error.message,
-    });
+    recordAudit(req, { action: "ask", resourceType: "contract", resourceId: contract._id, summary: `Asked "${contract.title}": "${q.slice(0, 65)}"${cached ? " (cached)" : ""}` });
+    res.json({ qaId: qa?._id || null, contractId: contract._id, contractTitle: contract.title, fileName: contract.fileName, latencyMs, cached, ...data });
+  } catch (err) {
+    console.error("Contract Q&A error:", err.message);
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to run contract Q&A." });
   }
 });
 

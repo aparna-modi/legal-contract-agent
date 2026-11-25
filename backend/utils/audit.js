@@ -1,19 +1,22 @@
 const AuditLog = require("../models/AuditLog");
+const { getClientIp } = require("./security");
 
-async function recordAudit(req, { action, resourceType = "contract", resourceId = "", summary = "" }) {
-  if (!req?.user?._id) return;
+async function recordAudit(
+  req,
+  { userId = null, action, resourceType = "contract", resourceId = "", summary = "" }
+) {
+  const targetUserId = userId || req?.user?._id;
+  if (!targetUserId) return;
   try {
-    const ip =
-      req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() ||
-      req.socket?.remoteAddress ||
-      "";
     await AuditLog.create({
-      user: req.user._id,
+      user: targetUserId,
       action,
       resourceType,
       resourceId: resourceId ? String(resourceId) : "",
       summary,
-      ipAddress: ip,
+      ipAddress: getClientIp(req),
+      userAgent: String(req?.headers?.["user-agent"] || "").slice(0, 250),
+      requestId: req?.requestId || "",
     });
   } catch (err) {
     console.warn("Audit log write skipped:", err.message);

@@ -77,7 +77,6 @@ async function ensureServicesRunning() {
 
   let backendPort = Number(new URL(BACKEND_URL).port || 5000);
   const backendState = await probeService(`${BACKEND_URL}/health`);
-  // If we had to use an alternate AI port, spin up a dedicated backend pointing to it.
   if (backendState !== "healthy" || aiPort !== 8000) {
     if (backendState !== "free") {
       backendPort = 5011;
@@ -132,10 +131,16 @@ process.on("SIGINT", () => {
   process.exit(1);
 });
 
-async function uploadMultipartContract(token, title, fileName, contentString) {
+function extractRefreshCookie(res) {
+  const setCookie = res.headers.get("set-cookie") || "";
+  const match = setCookie.match(/lca_refresh_token=([^;]+)/);
+  return match ? `lca_refresh_token=${match[1]}` : "";
+}
+
+async function uploadMultipartContract(token, title, fileName, contentString, contentType = "text/plain") {
   const boundary = "----LegalAgentBoundary" + Math.random().toString(36).slice(2);
   const preBoundary = `--${boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\n${title}\r\n`;
-  const fileHeader = `--${boundary}\r\nContent-Disposition: form-data; name="contract"; filename="${fileName}"\r\nContent-Type: text/plain\r\n\r\n`;
+  const fileHeader = `--${boundary}\r\nContent-Disposition: form-data; name="contract"; filename="${fileName}"\r\nContent-Type: ${contentType}\r\n\r\n`;
   const postBoundary = `\r\n--${boundary}--\r\n`;
 
   const bodyBuffer = Buffer.concat([
@@ -159,8 +164,8 @@ async function runTests() {
   console.log("Running Legal Contract Agent end-to-end verification...\n");
   await ensureServicesRunning();
 
-  // 1. AI service health
-  console.log("\n[1] AI service health telemetry");
+  // 1. AI service health & probes
+  console.log("\n[1] AI service health & readiness probes");
   const healthRes = await fetch(`${AI_URL}/health`);
   assert(healthRes.status === 200, "AI /health returns HTTP 200");
   const healthData = await healthRes.json();
@@ -170,6 +175,10 @@ async function runTests() {
   assert(healthData.extractors_ready?.txt === true, "TXT extractor ready");
   assert(healthData.embeddings_ready === true, "Embeddings engine ready");
   assert(healthData.vector_store_ready === true, "ChromaDB store ready");
+
+  const readyRes = await fetch(`${BACKEND_URL}/health/ready`);
+  assert(readyRes.status === 200, "Backend /health/ready returns HTTP 200");
+  assert(Boolean(readyRes.headers.get("x-request-id")), "Backend attaches X-Request-Id header");
   console.log(`  Embedding provider: ${healthData.embedding_provider}`);
   console.log(`  LLM provider:       ${healthData.llm_provider}`);
 
@@ -201,18 +210,30 @@ async function runTests() {
   const simData = await simRes.json();
   assert(simData.similarity > 0.3, `Positive legal similarity (${simData.similarity})`);
 
-  // 3. Auth register & login
-  console.log("\n[3] Authentication (register + login)");
+  // 3. Hardened Authentication (password policy, register, login, refresh rotation, RBAC)
+  console.log("\n[3] Authentication, rotating refresh tokens & RBAC");
+  const weakReg = await fetch(`${BACKEND_URL}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Weak User", email: `weak_${Date.now()}@legalagent.test`, password: "123" }),
+  });
+  assert(weakReg.status === 400, "Weak password rejected with HTTP 400");
+
   const uniqueEmail = `e2e_${Date.now()}@legalagent.test`;
   const regRes = await fetch(`${BACKEND_URL}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "E2E Reviewer", email: uniqueEmail, password: "password123" }),
+    body: JSON.stringify({
+      name: "E2E Reviewer",
+      email: uniqueEmail,
+      password: "password123",
+      organization: "E2E Legal Ops",
+    }),
   });
   assert(regRes.status === 201, "POST /api/auth/register returns HTTP 201");
   const regData = await regRes.json();
-  assert(Boolean(regData.token), "Registration returns JWT");
-  const token = regData.token;
+  assert(Boolean(regData.token), "Registration returns short-lived JWT");
+  assert(regData.user?.role === "reviewer", "New user defaults to reviewer RBAC role");
 
   const loginRes = await fetch(`${BACKEND_URL}/api/auth/login`, {
     method: "POST",
@@ -220,9 +241,53 @@ async function runTests() {
     body: JSON.stringify({ email: uniqueEmail, password: "password123" }),
   });
   assert(loginRes.status === 200, "POST /api/auth/login returns HTTP 200");
+  const initialCookie = extractRefreshCookie(loginRes);
+  assert(Boolean(initialCookie), "Login issues HttpOnly refresh cookie");
 
-  // 4. Upload two contracts (v1 and v2) for extraction, Q&A, report, and comparison
-  console.log("\n[4] Contract upload & AI extraction pipeline");
+  // Rotate refresh token once
+  const refreshRes = await fetch(`${BACKEND_URL}/api/auth/refresh`, {
+    method: "POST",
+    headers: { Cookie: initialCookie },
+  });
+  assert(refreshRes.status === 200, "POST /api/auth/refresh rotates refresh token");
+  const refreshData = await refreshRes.json();
+  let token = refreshData.token;
+  assert(Boolean(token), "Refresh returns fresh access JWT");
+
+  // Replaying the old rotated refresh token must trigger family revocation (401)
+  const replayRes = await fetch(`${BACKEND_URL}/api/auth/refresh`, {
+    method: "POST",
+    headers: { Cookie: initialCookie },
+  });
+  assert(replayRes.status === 401, "Replayed refresh token rejected (theft detection)");
+
+  // Verify /api/auth/me, /api/auth/sessions, /api/system/status, and RBAC 403
+  const meRes = await fetch(`${BACKEND_URL}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(meRes.status === 200, "GET /api/auth/me returns profile");
+
+  const sysRes = await fetch(`${BACKEND_URL}/api/system/status`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(sysRes.status === 200, "GET /api/system/status returns live infrastructure telemetry");
+
+  const adminRes = await fetch(`${BACKEND_URL}/api/system/admin/audit`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(adminRes.status === 403, "RBAC blocks non-admin from /api/system/admin/audit (403)");
+
+  // 4. Upload validation (magic-byte check) & two contracts for extraction
+  console.log("\n[4] Magic-byte upload security & stateless AI extraction pipeline");
+  const fakePdfRes = await uploadMultipartContract(
+    token,
+    "Disguised Payload",
+    "malicious.pdf",
+    "<script>alert(1)</script> fake pdf content",
+    "application/pdf"
+  );
+  assert(fakePdfRes.status === 400, "Magic-byte validation rejects disguised PDF upload (400)");
+
   const contractV1Text = `MASTER SERVICES AGREEMENT
 Effective January 15, 2026 between Acme Cloud Inc. and Northstar Consulting LLC for an initial term of 12 months.
 
@@ -263,7 +328,20 @@ This Agreement is governed by the laws of California.`;
   assert(up2Res.status === 201, "Uploaded Contract v2");
   const contract2Id = (await up2Res.json()).document._id;
 
-  // 5. Extract & analyze both contracts
+  // Cross-tenant isolation check: a second user must receive 403 on User 1's contract
+  const otherEmail = `other_${Date.now()}@legalagent.test`;
+  const otherReg = await fetch(`${BACKEND_URL}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Other Tenant", email: otherEmail, password: "password123" }),
+  });
+  const otherToken = (await otherReg.json()).token;
+  const crossTenantRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}`, {
+    headers: { Authorization: `Bearer ${otherToken}` },
+  });
+  assert(crossTenantRes.status === 403, "Cross-tenant access to another user's contract returns 403");
+
+  // 5. Extract & analyze both contracts via stateless multipart forwarding
   const ex1Res = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/extract`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
@@ -277,20 +355,107 @@ This Agreement is governed by the laws of California.`;
   assert(Array.isArray(ex1Data.document.missingClauses), "Missing clauses array persisted on v1");
   assert(typeof ex1Data.document.riskSummary?.score === "number", "Risk score persisted on v1");
 
-  const ex2Res = await fetch(`${BACKEND_URL}/api/contracts/${contract2Id}/extract`, {
+  const ex2Res = await fetch(`${BACKEND_URL}/api/contracts/${contract2Id}/extract-async`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
   });
-  assert(ex2Res.status === 200, "Extracted & analyzed Contract v2");
+  assert(ex2Res.status === 202, "Enqueued async extraction job for Contract v2 (202)");
+  const ex2Queued = await ex2Res.json();
+  assert(Boolean(ex2Queued.jobId), "Async extraction returns jobId");
+
+  let asyncDone = false;
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const jobRes = await fetch(`${BACKEND_URL}/api/contracts/jobs/${ex2Queued.jobId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const jobData = await jobRes.json();
+    if (jobData.job?.status === "completed") {
+      asyncDone = true;
+      break;
+    }
+    if (jobData.job?.status === "failed") {
+      throw new Error(`Async job failed: ${jobData.job?.error}`);
+    }
+  }
+  assert(asyncDone, "Async background extraction job completed for Contract v2");
+
+  // 5b. Source file streaming, Playbook evaluation, Clause Redline, Team RBAC, Metrics & Password Reset
+  console.log("\n[4b] Source document stream, Playbook, AI Redlines, Team RBAC & Metrics");
+  const fileStreamRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/file`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(fileStreamRes.status === 200, "GET /file streams original contract for Document Viewer");
+
+  const pbRes = await fetch(`${BACKEND_URL}/api/playbook`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(pbRes.status === 200, "GET /api/playbook returns default firm playbook");
+
+  const presetsRes = await fetch(`${BACKEND_URL}/api/playbook/presets`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(presetsRes.status === 200, "GET /api/playbook/presets returns jurisdiction rule packs");
+  const presetsData = await presetsRes.json();
+  assert((presetsData.presets || []).length >= 3, "At least 3 jurisdiction presets available");
+
+  const applyPresetRes = await fetch(`${BACKEND_URL}/api/playbook/presets/us_commercial`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(applyPresetRes.status === 200, "POST /api/playbook/presets/:id applies jurisdiction pack");
+
+  const pbEvalRes = await fetch(`${BACKEND_URL}/api/playbook/evaluate/${contract1Id}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(pbEvalRes.status === 200, "POST /api/playbook/evaluate/:id evaluates contract compliance");
+  const pbEvalData = await pbEvalRes.json();
+  assert(typeof pbEvalData.compliance_score === "number", `Playbook compliance score: ${pbEvalData.compliance_score}%`);
+
+  const teamRes = await fetch(`${BACKEND_URL}/api/team`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(teamRes.status === 200, "GET /api/team initializes Organization workspace");
+  const teamData = await teamRes.json();
+  assert(Boolean(teamData.organization?.inviteCode), "Organization admin receives workspace invite code");
+
+  const adminOverviewRes = await fetch(`${BACKEND_URL}/api/system/admin/overview`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(adminOverviewRes.status === 200, "GET /api/system/admin/overview returns cross-account platform stats for admin");
+  const adminOverview = await adminOverviewRes.json();
+  assert(adminOverview.users?.total >= 2 && adminOverview.contracts?.total >= 2, "Admin overview aggregates accounts and contracts");
+
+  const metricsRes = await fetch(`${BACKEND_URL}/metrics`);
+  assert(metricsRes.status === 200, "GET /metrics exposes Prometheus telemetry");
+  const metricsBody = await metricsRes.text();
+  assert(metricsBody.includes("lca_http_requests_total"), "Prometheus metrics include HTTP counters");
 
   // 6. Clauses, Summary & Report export
-  console.log("\n[5] Clauses, summary, and Markdown report export");
+  console.log("\n[5] Clauses, AI Redline Suggestion, summary, and Markdown report export");
   const clausesRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/clauses`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   assert(clausesRes.status === 200, "GET /clauses returns HTTP 200");
   const clausesData = await clausesRes.json();
   assert(clausesData.count >= 3, `Retrieved ${clausesData.count} clauses from MongoDB`);
+  assert(
+    clausesData.clauses.every((c) => Boolean(c.plainEnglish) && Boolean(c.indianLawRef)),
+    "Every extracted clause includes plain-English explanation and Indian law reference"
+  );
+
+  const firstClauseId = clausesData.clauses[0]?._id;
+  const redlineRes = await fetch(
+    `${BACKEND_URL}/api/contracts/${contract1Id}/clauses/${firstClauseId}/suggest-redline`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+  assert(redlineRes.status === 200, "POST /suggest-redline drafts fallback clause wording");
+  const redlineData = await redlineRes.json();
+  assert(Boolean(redlineData.suggested_text), "Suggested redline contains alternative wording");
 
   const summaryRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/summary`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -329,8 +494,21 @@ This Agreement is governed by the laws of California.`;
   const askData = await askRes.json();
   assert(askData.insufficient_information === false, "Indemnity query answered with grounded evidence");
   assert(askData.citations?.length > 0, "Structured citations returned");
+  assert(Array.isArray(askData.indian_law_refs) && askData.indian_law_refs.length > 0, "Indian law Act & Section references returned");
   assert(askData.answer.length > 0, "Grounded answer text returned");
   assert(Boolean(askData.qaId), "Persisted Q&A record returns qaId");
+
+  const cachedAskRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/ask`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: "What are the indemnification terms and attorney fees conditions?",
+      top_k: 3,
+      min_score: 0.20,
+    }),
+  });
+  const cachedAskData = await cachedAskRes.json();
+  assert(cachedAskRes.status === 200 && cachedAskData.cached === true, "Repeated Q&A query served from cache");
 
   const fbRes = await fetch(`${BACKEND_URL}/api/feedback`, {
     method: "POST",
@@ -344,7 +522,10 @@ This Agreement is governed by the laws of California.`;
   });
   assert(qaHistRes.status === 200, "GET /qa returns saved history");
   const qaHistData = await qaHistRes.json();
-  assert(qaHistData.count >= 1 && qaHistData.history[0].feedback?.rating === "up", "Q&A history includes saved feedback");
+  assert(
+    qaHistData.count >= 1 && qaHistData.history.some((h) => String(h._id) === String(askData.qaId) && h.feedback?.rating === "up"),
+    "Q&A history includes saved feedback"
+  );
 
   const oosRes = await fetch(`${BACKEND_URL}/api/contracts/${contract1Id}/ask`, {
     method: "POST",
@@ -384,9 +565,6 @@ This Agreement is governed by the laws of California.`;
   assert(cmpData.counts?.unchanged >= 1, "Comparison detected unchanged Governing Law clause");
   assert(cmpData.counts?.modified >= 2, "Comparison detected modified Payment & Termination clauses");
   assert(cmpData.counts?.added >= 1 && cmpData.counts?.removed >= 1, "Comparison detected added Liability & removed Indemnity clauses");
-  console.log(
-    `  Diff summary: ${cmpData.counts.modified} modified, ${cmpData.counts.added} added, ${cmpData.counts.removed} removed, ${cmpData.counts.unchanged} unchanged`
-  );
 
   // 10. Workspace Analytics & Audit Trail
   console.log("\n[9] Portfolio analytics and audit trail");
@@ -399,8 +577,8 @@ This Agreement is governed by the laws of California.`;
   assert(analyticsData.qaMetrics?.feedbackUp >= 1, "Analytics aggregates feedback ratings");
   assert(analyticsData.recentActivity?.length >= 3, "Audit log recorded recent actions");
 
-  // 11. Vector stats & cascade delete cleanup
-  console.log("\n[10] Vector telemetry & cascade deletion cleanup");
+  // 11. Vector stats, cascade deletion & global token revocation
+  console.log("\n[10] Vector telemetry, cascade deletion & global session revocation");
   const statsRes = await fetch(`${BACKEND_URL}/api/contracts/stats/vectors`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -422,6 +600,18 @@ This Agreement is governed by the laws of California.`;
     })
   ).json();
   assert(afterDelStats.user_vectors === 0, "All user vectors purged from ChromaDB after deletion");
+
+  // Global revocation must instantly invalidate the current access JWT
+  const logoutAllRes = await fetch(`${BACKEND_URL}/api/auth/logout-all`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(logoutAllRes.status === 200, "POST /api/auth/logout-all revokes all sessions");
+
+  const revokedCheck = await fetch(`${BACKEND_URL}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(revokedCheck.status === 401, "Previously valid JWT immediately rejected after logout-all (401)");
 
   console.log(`\nCompleted: ${testsPassed} passed, ${testsFailed} failed.`);
   cleanupSpawnedProcesses();

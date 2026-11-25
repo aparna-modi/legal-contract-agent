@@ -1,0 +1,63 @@
+name: CI — Legal Contract Agent
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  backend-and-frontend:
+    name: Backend Unit Tests & Frontend Lint/Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          npm ci || npm install
+          npm --prefix backend ci || npm --prefix backend install
+          npm --prefix frontend ci || npm --prefix frontend install
+
+      - name: Run Backend Unit Tests (Security, Storage, Load Balancer)
+        run: npm run backend:test
+
+      - name: Lint Frontend
+        run: npm run frontend:lint
+
+      - name: Build Frontend Production Bundle
+        run: npm run frontend:build
+
+  ai-service-tests:
+    name: AI Service Pytest & Offline RAG Evaluation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Python dependencies
+        working-directory: ai-service
+        run: pip install -r requirements.txt
+
+      - name: Run Pytest Suite
+        working-directory: ai-service
+        run: pytest -v
+
+      - name: Run Offline RAG & Risk Benchmark
+        working-directory: ai-service
+        run: python eval/evaluate_rag.py --offline
+
+  docker-compose-validate:
+    name: Validate Docker Compose Topology
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose.yml config
+        run: docker compose config -q

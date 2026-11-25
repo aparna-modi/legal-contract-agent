@@ -10,6 +10,7 @@ from services.clause_service import (
     summarize_risk_profile,
 )
 from services.embedding_service import embedding_service
+from services.security import validate_file_content, validate_safe_file_path
 
 
 def _enrich_extraction_result(result: ExtractionResult, embed: bool) -> ExtractionResult:
@@ -41,17 +42,21 @@ def _enrich_extraction_result(result: ExtractionResult, embed: bool) -> Extracti
 
 class ExtractionService:
     @staticmethod
-    async def extract_from_upload(file: UploadFile, embed: bool = True) -> ExtractionResult:
+    async def extract_from_upload(
+        file: UploadFile,
+        embed: bool = True,
+        custom_name: Optional[str] = None,
+    ) -> ExtractionResult:
         if not file.filename:
             raise HTTPException(status_code=400, detail="Uploaded file must have a filename.")
 
+        display_name = custom_name or file.filename
         try:
             content = await file.read()
-            if not content:
-                raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+            validate_file_content(content, file.filename)
 
             extractor = get_extractor(file.filename)
-            result = extractor.extract_from_bytes(content, file.filename)
+            result = extractor.extract_from_bytes(content, display_name)
             return _enrich_extraction_result(result, embed=embed)
         except ValueError as err:
             raise HTTPException(status_code=400, detail=str(err))
@@ -60,7 +65,7 @@ class ExtractionService:
         except Exception as err:
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to extract document '{file.filename}': {err}",
+                detail=f"Failed to extract document '{display_name}': {err}",
             )
 
     @staticmethod
@@ -69,22 +74,19 @@ class ExtractionService:
         custom_name: Optional[str] = None,
         embed: bool = True,
     ) -> ExtractionResult:
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail=f"File not found on server: '{file_path}'")
-
-        display_name = custom_name or os.path.basename(file_path)
+        resolved_path = validate_safe_file_path(file_path)
+        display_name = custom_name or os.path.basename(str(resolved_path))
         try:
-            with open(file_path, "rb") as handle:
+            with open(resolved_path, "rb") as handle:
                 content = handle.read()
 
-            if not content:
-                raise HTTPException(status_code=400, detail=f"File '{display_name}' is empty.")
+            validate_file_content(content, str(resolved_path))
 
-            ext_to_use = os.path.splitext(file_path)[1]
+            ext_to_use = os.path.splitext(str(resolved_path))[1]
             if not ext_to_use and custom_name:
                 ext_to_use = os.path.splitext(custom_name)[1]
             if not ext_to_use:
-                ext_to_use = os.path.basename(file_path)
+                ext_to_use = os.path.basename(str(resolved_path))
 
             extractor = get_extractor(ext_to_use)
             result = extractor.extract_from_bytes(content, display_name)

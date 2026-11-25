@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from typing import Optional, Type, TypeVar
 
 import httpx
@@ -13,47 +14,53 @@ T = TypeVar("T", bound=BaseModel)
 DEFAULT_GEMINI_MODELS = (
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-4-hydrogen",
+    "gemini-3.5-flash",
 )
+MODEL_COOLDOWN_SECONDS = 90.0
 
 
 class LLMClient:
-    """Thin wrapper around the Gemini Interactions API with optional OpenAI fallback."""
+    """Gemini (google-genai models API) & OpenAI LLM wrapper with bounded latency and cooldowns."""
 
     def __init__(self) -> None:
         self._disabled_gemini_keys: set[str] = set()
         self._disabled_openai_keys: set[str] = set()
+        self._model_cooldowns: dict[str, float] = {}
         self._clients: dict[str, object] = {}
 
     def _get_gemini_key(self) -> Optional[str]:
-        key = os.environ.get("GEMINI_API_KEY")
-        if not key or key.strip() in ("", "your_gemini_api_key_here"):
-            return None
-        if key in self._disabled_gemini_keys:
+        key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+        if not key or key == "your_gemini_api_key_here" or key in self._disabled_gemini_keys:
             return None
         return key
 
     def _get_openai_key(self) -> Optional[str]:
-        key = os.environ.get("OPENAI_API_KEY")
-        if not key or key.strip() in ("", "your_openai_api_key_here"):
-            return None
-        if key in self._disabled_openai_keys:
+        key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+        if not key or key == "your_openai_api_key_here" or key in self._disabled_openai_keys:
             return None
         return key
 
     def _get_genai_client(self, api_key: str):
         if api_key not in self._clients:
             from google import genai
+            from google.genai import types
 
-            self._clients[api_key] = genai.Client(api_key=api_key)
+            self._clients[api_key] = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=18_000),
+            )
         return self._clients[api_key]
 
-    def _model_candidates(self) -> tuple[str, ...]:
+    def _model_candidates(self, tier: str = "balanced") -> tuple[str, ...]:
         override = os.environ.get("GEMINI_LLM_MODEL", "").strip()
+        ordered = (
+            ("gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
+            if tier == "strong"
+            else DEFAULT_GEMINI_MODELS
+        )
         if override:
-            rest = tuple(m for m in DEFAULT_GEMINI_MODELS if m != override)
-            return (override, *rest)
-        return DEFAULT_GEMINI_MODELS
+            return (override, *(m for m in ordered if m != override))
+        return ordered
 
     def get_active_provider(self) -> str:
         if self._get_gemini_key():
@@ -68,32 +75,16 @@ class LLMClient:
         system_instruction: Optional[str] = None,
         max_output_tokens: int = 1024,
         timeout: float = 15.0,
+        tier: str = "balanced",
     ) -> Optional[str]:
-        """Generate plain text using Gemini Interactions API (with OpenAI fallback)."""
         gemini_key = self._get_gemini_key()
         if gemini_key:
-            text = self._call_gemini(
-                api_key=gemini_key,
-                prompt=prompt,
-                system_instruction=system_instruction,
-                max_output_tokens=max_output_tokens,
-                response_format=None,
-                timeout=timeout,
-            )
+            text = self._call_gemini(gemini_key, prompt, system_instruction, max_output_tokens, None, timeout, tier)
             if text:
                 return text
-
         openai_key = self._get_openai_key()
         if openai_key:
-            return self._call_openai(
-                api_key=openai_key,
-                prompt=prompt,
-                system_instruction=system_instruction,
-                max_output_tokens=max_output_tokens,
-                json_mode=False,
-                timeout=timeout,
-            )
-
+            return self._call_openai(openai_key, prompt, system_instruction, max_output_tokens, False, timeout)
         return None
 
     def generate_structured(
@@ -101,51 +92,54 @@ class LLMClient:
         prompt: str,
         schema: Type[T],
         system_instruction: Optional[str] = None,
-        max_output_tokens: int = 1200,
+        max_output_tokens: int = 1600,
         timeout: float = 18.0,
+        tier: str = "balanced",
     ) -> Optional[T]:
-        """Generate a validated Pydantic object using Gemini structured JSON output."""
-        json_schema = schema.model_json_schema()
-        response_format = {
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": json_schema,
-        }
-
         gemini_key = self._get_gemini_key()
         if gemini_key:
-            raw = self._call_gemini(
-                api_key=gemini_key,
-                prompt=prompt,
-                system_instruction=system_instruction,
-                max_output_tokens=max_output_tokens,
-                response_format=response_format,
-                timeout=timeout,
-            )
-            if raw:
-                parsed = self._parse_schema(raw, schema)
-                if parsed is not None:
-                    return parsed
+            raw = self._call_gemini(gemini_key, prompt, system_instruction, max_output_tokens, schema, timeout, tier)
+            parsed = self._parse_schema(raw, schema) if raw else None
+            if parsed is not None:
+                return parsed
 
         openai_key = self._get_openai_key()
         if openai_key:
-            schema_prompt = (
-                f"{prompt}\n\nRespond ONLY with valid JSON matching this schema:\n"
-                f"{json.dumps(json_schema)}"
-            )
-            raw = self._call_openai(
-                api_key=openai_key,
-                prompt=schema_prompt,
-                system_instruction=system_instruction,
-                max_output_tokens=max_output_tokens,
-                json_mode=True,
-                timeout=timeout,
-            )
+            schema_prompt = f"{prompt}\n\nRespond ONLY with valid JSON matching this schema:\n{json.dumps(schema.model_json_schema())}"
+            raw = self._call_openai(openai_key, schema_prompt, system_instruction, max_output_tokens, True, timeout)
             if raw:
-                parsed = self._parse_schema(raw, schema)
-                if parsed is not None:
-                    return parsed
+                return self._parse_schema(raw, schema)
+        return None
 
+    def ocr_pdf_bytes(self, pdf_bytes: bytes, timeout: float = 30.0) -> Optional[list[str]]:
+        gemini_key = self._get_gemini_key()
+        if not gemini_key or not pdf_bytes:
+            return None
+        try:
+            from google.genai import types
+
+            client = self._get_genai_client(gemini_key)
+            prompt = (
+                "Transcribe all readable legal text from this scanned PDF contract accurately. "
+                "Preserve section headings, numbering, and clauses. "
+                "Separate each page with a line containing exactly '---PAGE_BREAK---'. "
+                "Output only the transcribed contract text without commentary."
+            )
+            pdf_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+            for model in self._model_candidates():
+                try:
+                    resp = client.models.generate_content(model=model, contents=[pdf_part, prompt])
+                    text = getattr(resp, "text", None)
+                    if text and text.strip():
+                        pages = [p.strip() for p in text.split("---PAGE_BREAK---") if p.strip()]
+                        return pages or [text.strip()]
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    if any(k in msg for k in ("api key", "401", "403")):
+                        self._disabled_gemini_keys.add(gemini_key)
+                        return None
+        except Exception:
+            return None
         return None
 
     def _call_gemini(
@@ -154,47 +148,52 @@ class LLMClient:
         prompt: str,
         system_instruction: Optional[str],
         max_output_tokens: int,
-        response_format: Optional[dict],
+        response_schema: Optional[Type[BaseModel]],
         timeout: float,
+        tier: str = "balanced",
     ) -> Optional[str]:
         try:
+            from google.genai import types
+
             client = self._get_genai_client(api_key)
         except Exception:
             return None
 
-        for model in self._model_candidates():
-            gen_config: dict = {"max_output_tokens": max_output_tokens}
-            if model.startswith("gemini-3.5"):
-                gen_config["thinking_level"] = "minimal"
-            elif model.startswith("gemini-4"):
-                gen_config["thinking_level"] = "low"
+        deadline = time.monotonic() + timeout
+        for model in self._model_candidates(tier):
+            now = time.monotonic()
+            if self._model_cooldowns.get(model, 0.0) > now:
+                continue
+            if deadline - now < 1.5:
+                break
 
-            kwargs: dict = {
-                "model": model,
-                "input": prompt,
-                "store": False,
-                "generation_config": gen_config,
-                "timeout": timeout,
+            cfg_kwargs: dict = {
+                "temperature": 0.15,
+                "max_output_tokens": max_output_tokens,
             }
             if system_instruction:
-                kwargs["system_instruction"] = system_instruction
-            if response_format:
-                kwargs["response_format"] = response_format
+                cfg_kwargs["system_instruction"] = system_instruction
+            if response_schema is not None:
+                cfg_kwargs["response_mime_type"] = "application/json"
+                cfg_kwargs["response_schema"] = response_schema
 
             try:
-                interaction = client.interactions.create(**kwargs)
-                output = getattr(interaction, "output_text", None)
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(**cfg_kwargs),
+                )
+                output = getattr(resp, "text", None)
                 if output and output.strip():
                     return output.strip()
             except Exception as exc:
-                err_msg = str(exc).lower()
-                # Auth errors invalidate the key for the rest of this process.
-                if "api key" in err_msg or "401" in err_msg or "403" in err_msg or "permission" in err_msg:
+                msg = str(exc).lower()
+                if any(k in msg for k in ("api key", "401", "403", "permission")):
                     self._disabled_gemini_keys.add(api_key)
                     return None
-                # Try the next model on model-not-found, timeout, or transient failure.
+                if any(k in msg for k in ("503", "429", "quota", "timeout", "timed out", "not found", "404")):
+                    self._model_cooldowns[model] = time.monotonic() + MODEL_COOLDOWN_SECONDS
                 continue
-
         return None
 
     def _call_openai(
@@ -206,27 +205,15 @@ class LLMClient:
         json_mode: bool,
         timeout: float,
     ) -> Optional[str]:
-        messages = []
-        if system_instruction:
-            messages.append({"role": "system", "content": system_instruction})
-        messages.append({"role": "user", "content": prompt})
-
-        payload: dict = {
-            "model": "gpt-4o-mini",
-            "messages": messages,
-            "temperature": 0.0,
-            "max_tokens": max_output_tokens,
-        }
+        messages = ([{"role": "system", "content": system_instruction}] if system_instruction else []) + [
+            {"role": "user", "content": prompt}
+        ]
+        payload: dict = {"model": "gpt-4o-mini", "messages": messages, "temperature": 0.1, "max_tokens": max_output_tokens}
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
-
         try:
             with httpx.Client(timeout=timeout) as client:
-                resp = client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json=payload,
-                )
+                resp = client.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
                 if resp.status_code == 200:
                     return resp.json()["choices"][0]["message"]["content"].strip()
                 if resp.status_code in (401, 403):
@@ -248,13 +235,12 @@ class LLMClient:
         try:
             return schema.model_validate_json(text)
         except Exception:
-            try:
-                start = text.find("{")
-                end = text.rfind("}")
-                if start != -1 and end > start:
+            start, end = text.find("{"), text.rfind("}")
+            if start != -1 and end > start:
+                try:
                     return schema.model_validate_json(text[start : end + 1])
-            except Exception:
-                return None
+                except Exception:
+                    return None
         return None
 
 

@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { authApi, configureAuthCallbacks } from "../api/client";
 
 const AuthContext = createContext(null);
 
@@ -21,34 +22,121 @@ export const AuthProvider = ({ children }) => {
       return null;
     }
   });
+  const [sessionReady, setSessionReady] = useState(() => !localStorage.getItem("jwt"));
 
-  const login = (userData, jwtToken) => {
+  const persistSession = useCallback((userData, jwtToken) => {
     setUser(userData);
     setToken(jwtToken);
-    localStorage.setItem("jwt", jwtToken);
-    localStorage.setItem("user", JSON.stringify(userData));
-  };
+    if (jwtToken) localStorage.setItem("jwt", jwtToken);
+    if (userData) localStorage.setItem("user", JSON.stringify(userData));
+  }, []);
 
-  const register = (userData, jwtToken) => {
-    login(userData, jwtToken);
-  };
-
-  const logout = () => {
+  const clearLocalSession = useCallback(() => {
     setUser(null);
     setToken(null);
     localStorage.removeItem("jwt");
     localStorage.removeItem("user");
-  };
+  }, []);
+
+  useEffect(() => {
+    configureAuthCallbacks({
+      onRefresh: (newToken, newUser) => {
+        setToken(newToken);
+        localStorage.setItem("jwt", newToken);
+        if (newUser) {
+          setUser(newUser);
+          localStorage.setItem("user", JSON.stringify(newUser));
+        }
+      },
+      onExpired: () => {
+        clearLocalSession();
+      },
+    });
+  }, [clearLocalSession]);
+
+  // Verify or silently refresh session on initial boot.
+  useEffect(() => {
+    let active = true;
+    const savedToken = localStorage.getItem("jwt");
+
+    if (!savedToken) {
+      return undefined;
+    }
+
+    authApi
+      .me(savedToken)
+      .then((res) => {
+        if (!active) return;
+        if (res?.user) {
+          setUser(res.user);
+          localStorage.setItem("user", JSON.stringify(res.user));
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        // Token may have been refreshed silently; if still invalid, clearLocalSession already ran.
+      })
+      .finally(() => {
+        if (active) setSessionReady(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const login = useCallback(
+    (userData, jwtToken) => {
+      persistSession(userData, jwtToken);
+    },
+    [persistSession]
+  );
+
+  const register = useCallback(
+    (userData, jwtToken) => {
+      persistSession(userData, jwtToken);
+    },
+    [persistSession]
+  );
+
+  const updateUser = useCallback((updatedUser) => {
+    setUser(updatedUser);
+    localStorage.setItem("user", JSON.stringify(updatedUser));
+  }, []);
+
+  const logout = useCallback(async () => {
+    try {
+      await authApi.logout();
+    } catch {
+      // Clear local session even if server is unreachable
+    } finally {
+      clearLocalSession();
+    }
+  }, [clearLocalSession]);
+
+  const logoutAll = useCallback(async () => {
+    if (token) {
+      try {
+        await authApi.logoutAll(token);
+      } catch {
+        // Proceed with local clear
+      }
+    }
+    clearLocalSession();
+  }, [token, clearLocalSession]);
 
   return (
     <AuthContext.Provider
       value={{
         user,
         token,
+        sessionReady,
         login,
         register,
+        updateUser,
         logout,
-        isAuthenticated: !!token,
+        logoutAll,
+        isAuthenticated: Boolean(token),
       }}
     >
       {children}

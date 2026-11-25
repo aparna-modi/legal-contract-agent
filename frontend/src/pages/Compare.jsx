@@ -4,79 +4,92 @@ import { contractsApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { CompareIcon, PlusIcon, SwapIcon } from "../components/Icons";
 
-export default function Compare() {
-  const { token, isAuthenticated } = useAuth();
-  const [contracts, setContracts] = useState([]);
-  const [loadingList, setLoadingList] = useState(Boolean(token));
+function wordDiff(textA = "", textB = "") {
+  const a = String(textA).split(/(\s+)/);
+  const b = String(textB).split(/(\s+)/);
+  if (a.length > 350 || b.length > 350) {
+    return { left: [{ text: textA, type: "same" }], right: [{ text: textB, type: "same" }] };
+  }
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const left = [];
+  const right = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      left.push({ text: a[i], type: "same" });
+      right.push({ text: b[j++], type: "same" });
+      i++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      left.push({ text: a[i++], type: "del" });
+    } else {
+      right.push({ text: b[j++], type: "add" });
+    }
+  }
+  while (i < m) left.push({ text: a[i++], type: "del" });
+  while (j < n) right.push({ text: b[j++], type: "add" });
+  return { left, right };
+}
 
-  const [contractAId, setContractAId] = useState("");
-  const [contractBId, setContractBId] = useState("");
+const RedlineText = ({ segments }) => (
+  <p className="redline-prose">
+    {segments.map((s, i) =>
+      s.type === "del" ? <del key={i} className="diff-del">{s.text}</del>
+      : s.type === "add" ? <ins key={i} className="diff-add">{s.text}</ins>
+      : <span key={i}>{s.text}</span>
+    )}
+  </p>
+);
+
+export default function Compare() {
+  const { token } = useAuth();
+  const [contracts, setContracts] = useState([]);
+  const [loading, setLoading] = useState(Boolean(token));
+  const [idA, setIdA] = useState("");
+  const [idB, setIdB] = useState("");
   const [comparing, setComparing] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
-  const [activeDiffTab, setActiveDiffTab] = useState("modified");
+  const [tab, setTab] = useState("modified");
+  const [redline, setRedline] = useState(true);
 
   useEffect(() => {
     if (!token) return;
-    let cancelled = false;
-    contractsApi
-      .list(token)
-      .then((data) => {
-        if (cancelled) return;
-        const analyzed = (data.contracts || []).filter((c) => c.status === "completed");
-        setContracts(analyzed);
-        if (analyzed.length >= 2) {
-          setContractAId((prev) => prev || analyzed[0]._id);
-          setContractBId((prev) => prev || analyzed[1]._id);
+    let active = true;
+    contractsApi.list(token)
+      .then(({ contracts: list = [] }) => {
+        if (!active) return;
+        const done = list.filter((c) => c.status === "completed");
+        setContracts(done);
+        if (done.length >= 2) {
+          setIdA((v) => v || done[0]._id);
+          setIdB((v) => v || done[1]._id);
         }
       })
-      .catch((err) => {
-        if (!cancelled) setError(err.message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingList(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .catch((err) => active && setError(err.message))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
   }, [token]);
 
-  if (!isAuthenticated) {
-    return (
-      <div className="empty-box surface-card centered-card">
-        <h3>Sign in to compare contracts</h3>
-        <p>Select two analyzed agreements from your workspace to inspect clause-level changes.</p>
-        <Link to="/login" className="btn btn-primary">
-          Sign in
-        </Link>
-      </div>
-    );
-  }
-
-  const handleSwap = () => {
-    setContractAId(contractBId);
-    setContractBId(contractAId);
-    setResult(null);
-  };
-
-  const handleCompare = async (e) => {
+  const compare = async (e) => {
     e.preventDefault();
-    if (!contractAId || !contractBId) return;
-    if (contractAId === contractBId) {
-      setError("Choose two different contracts to compare.");
-      return;
-    }
-
+    if (!idA || !idB) return;
+    if (idA === idB) return setError("Choose two different contracts to compare.");
     setComparing(true);
     setError(null);
     setResult(null);
     try {
-      const data = await contractsApi.compare(token, contractAId, contractBId);
+      const data = await contractsApi.compare(token, idA, idB);
       setResult(data);
-      if (data.counts?.modified > 0) setActiveDiffTab("modified");
-      else if (data.counts?.added > 0) setActiveDiffTab("added");
-      else if (data.counts?.removed > 0) setActiveDiffTab("removed");
-      else setActiveDiffTab("unchanged");
+      const firstNonEmpty = ["modified", "added", "removed", "unchanged"].find((k) => (data.counts?.[k] || 0) > 0);
+      setTab(firstNonEmpty || "unchanged");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -88,265 +101,164 @@ export default function Compare() {
     <div className="workspace-page">
       <div className="page-header">
         <div>
-          <h1 className="page-heading">Contract Comparison</h1>
-          <p className="page-description">
-            Align clauses semantically across two analyzed agreements to surface modified, added,
-            and removed terms.
-          </p>
+          <h1 className="page-heading">Revision Comparison</h1>
+          <p className="page-description">Align clauses across two agreements with word-level redlines and risk-shift alerts.</p>
         </div>
-        <Link to="/upload" className="btn btn-secondary">
-          <PlusIcon size={15} />
-          Upload Contract
-        </Link>
+        <Link to="/upload" className="btn btn-secondary"><PlusIcon size={15} /> Upload Contract</Link>
       </div>
 
-      {loadingList ? (
-        <div className="surface-card state-box">
-          <div className="spinner" />
-          <p>Loading analyzed contracts...</p>
-        </div>
+      {loading ? (
+        <div className="surface-card state-box"><div className="spinner" /><p>Loading analyzed contracts...</p></div>
       ) : contracts.length < 2 ? (
         <div className="surface-card empty-box">
           <CompareIcon size={28} />
           <h3>At least two analyzed contracts are needed</h3>
-          <p>
-            Upload and analyze two agreements (for example, v1 and v2 of a vendor MSA or two
-            competing offers) to run a clause-by-clause comparison.
-          </p>
+          <p>Upload and analyze two agreements to run a clause-by-clause redline comparison.</p>
           <div className="hero-actions">
-            <Link to="/upload" className="btn btn-primary">
-              Upload Contract
-            </Link>
-            <Link to="/" className="btn btn-secondary">
-              Back to Workspace
-            </Link>
+            <Link to="/upload" className="btn btn-primary">Upload Contract</Link>
+            <Link to="/" className="btn btn-secondary">Back to Portfolio</Link>
           </div>
         </div>
       ) : (
         <>
-          <form onSubmit={handleCompare} className="surface-card compare-selector">
+          <form onSubmit={compare} className="surface-card compare-selector">
             <div className="compare-picker-grid">
               <div className="field">
-                <label htmlFor="contract-a" className="field-label">
-                  Baseline Contract (A)
-                </label>
-                <select
-                  id="contract-a"
-                  className="select-input"
-                  value={contractAId}
-                  onChange={(e) => setContractAId(e.target.value)}
-                  disabled={comparing}
-                >
-                  {contracts.map((c) => (
-                    <option key={c._id} value={c._id}>
-                      {c.title || c.fileName}
-                    </option>
-                  ))}
+                <label htmlFor="contract-a" className="field-label">Baseline Contract (A)</label>
+                <select id="contract-a" className="select-input" value={idA} onChange={(e) => setIdA(e.target.value)} disabled={comparing}>
+                  {contracts.map((c) => <option key={c._id} value={c._id}>{c.title || c.fileName}</option>)}
                 </select>
               </div>
-
               <button
                 type="button"
                 className="icon-btn swap-btn"
-                onClick={handleSwap}
-                disabled={comparing}
-                title="Swap baseline and revised contracts"
+                title="Swap contracts"
                 aria-label="Swap contracts"
+                disabled={comparing}
+                onClick={() => { setIdA(idB); setIdB(idA); setResult(null); }}
               >
                 <SwapIcon size={16} />
               </button>
-
               <div className="field">
-                <label htmlFor="contract-b" className="field-label">
-                  Revised / Comparison Contract (B)
-                </label>
-                <select
-                  id="contract-b"
-                  className="select-input"
-                  value={contractBId}
-                  onChange={(e) => setContractBId(e.target.value)}
-                  disabled={comparing}
-                >
-                  {contracts.map((c) => (
-                    <option key={c._id} value={c._id}>
-                      {c.title || c.fileName}
-                    </option>
-                  ))}
+                <label htmlFor="contract-b" className="field-label">Revised Contract (B)</label>
+                <select id="contract-b" className="select-input" value={idB} onChange={(e) => setIdB(e.target.value)} disabled={comparing}>
+                  {contracts.map((c) => <option key={c._id} value={c._id}>{c.title || c.fileName}</option>)}
                 </select>
               </div>
             </div>
-
             <div className="compare-submit-row">
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={comparing || !contractAId || !contractBId}
-              >
-                <CompareIcon size={15} />
-                {comparing ? "Comparing clauses..." : "Run Comparison"}
+              <button type="submit" className="btn btn-primary" disabled={comparing || !idA || !idB}>
+                <CompareIcon size={15} /> {comparing ? "Comparing..." : "Run Redline Comparison"}
               </button>
             </div>
           </form>
 
           {error && <div className="alert alert-error">{error}</div>}
-
-          {comparing && (
-            <div className="surface-card state-box">
-              <div className="spinner" />
-              <p>Matching clauses semantically and evaluating material differences...</p>
-            </div>
-          )}
+          {comparing && <div className="surface-card state-box"><div className="spinner" /><p>Matching clauses semantically...</p></div>}
 
           {result && (
             <div className="compare-results">
               <section className="surface-card compare-summary-card">
                 <div className="section-eyebrow">Comparison Overview</div>
                 <p className="summary-prose">{result.executive_summary}</p>
-
-                {result.material_changes && result.material_changes.length > 0 && (
+                {result.material_changes?.length > 0 && (
                   <div className="compare-highlights">
-                    <div className="section-eyebrow">Key Differences</div>
+                    <div className="section-eyebrow">Material Differences</div>
                     <ul className="clean-list">
-                      {result.material_changes.map((item, idx) => (
-                        <li key={idx}>{item}</li>
-                      ))}
+                      {result.material_changes.map((item, i) => <li key={i}>{item}</li>)}
                     </ul>
                   </div>
                 )}
-
                 {result.recommendation && (
-                  <div className="recommendation-box">
-                    <strong>Reviewer Takeaway:</strong> {result.recommendation}
-                  </div>
+                  <div className="recommendation-box"><strong>Counsel Takeaway:</strong> {result.recommendation}</div>
                 )}
               </section>
 
-              <div className="diff-tabs-bar">
-                {[
-                  { key: "modified", label: "Modified", count: result.counts?.modified || 0 },
-                  { key: "added", label: "Added in B", count: result.counts?.added || 0 },
-                  { key: "removed", label: "Removed from A", count: result.counts?.removed || 0 },
-                  { key: "unchanged", label: "Unchanged", count: result.counts?.unchanged || 0 },
-                ].map((tab) => (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    className={`diff-tab diff-tab-${tab.key} ${
-                      activeDiffTab === tab.key ? "active" : ""
-                    }`}
-                    onClick={() => setActiveDiffTab(tab.key)}
-                  >
-                    <span>{tab.label}</span>
-                    <span className="tab-count">{tab.count}</span>
-                  </button>
-                ))}
+              <div className="diff-toolbar-row">
+                <div className="diff-tabs-bar">
+                  {[
+                    ["modified", "Modified"],
+                    ["added", "Added in B"],
+                    ["removed", "Removed from A"],
+                    ["unchanged", "Unchanged"],
+                  ].map(([k, label]) => (
+                    <button key={k} type="button" className={`diff-tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
+                      <span>{label}</span>
+                      <span className="tab-count">{result.counts?.[k] || 0}</span>
+                    </button>
+                  ))}
+                </div>
+                {tab === "modified" && (
+                  <div className="segmented-control">
+                    <button type="button" className={`seg-btn ${redline ? "active" : ""}`} onClick={() => setRedline(true)}>Redline Diff</button>
+                    <button type="button" className={`seg-btn ${!redline ? "active" : ""}`} onClick={() => setRedline(false)}>Clean Text</button>
+                  </div>
+                )}
               </div>
 
               <div className="diff-list">
-                {activeDiffTab === "modified" &&
-                  (result.modified.length === 0 ? (
-                    <div className="surface-card state-box muted">
-                      <p>No modified clauses detected.</p>
-                    </div>
-                  ) : (
-                    result.modified.map((item, idx) => (
-                      <article key={idx} className="surface-card diff-card">
-                        <div className="diff-card-head">
-                          <span className="clause-category">{item.clause_type}</span>
-                          <span className="mono-caption">
-                            {Math.round((item.similarity || 0) * 100)}% semantic match
-                          </span>
-                        </div>
-
-                        {item.change_notes && item.change_notes.length > 0 && (
-                          <div className="diff-notes">
-                            {item.change_notes.map((note, i) => (
-                              <span key={i} className="diff-note-pill">
-                                {note}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-
-                        <div className="diff-columns">
-                          <div className="diff-pane pane-a">
-                            <div className="diff-pane-head">
-                              <span>{result.contract_a}</span>
-                              <span className={`risk-pill risk-${item.risk_a || "low"}`}>
-                                {(item.risk_a || "low").toUpperCase()}
-                              </span>
+                {tab === "modified" && (
+                  result.modified.length === 0
+                    ? <div className="surface-card state-box"><p>No modified clauses detected.</p></div>
+                    : result.modified.map((item, i) => {
+                        const diff = redline ? wordDiff(item.text_a, item.text_b) : null;
+                        return (
+                          <article key={i} className="surface-card diff-card">
+                            <div className="diff-card-head">
+                              <span className="clause-category">{item.clause_type}</span>
+                              <span className="mono-caption">{Math.round((item.similarity || 0) * 100)}% semantic match</span>
                             </div>
-                            <p>{item.text_a}</p>
-                          </div>
-
-                          <div className="diff-pane pane-b">
-                            <div className="diff-pane-head">
-                              <span>{result.contract_b}</span>
-                              <span className={`risk-pill risk-${item.risk_b || "low"}`}>
-                                {(item.risk_b || "low").toUpperCase()}
-                              </span>
+                            {item.change_notes?.length > 0 && (
+                              <div className="diff-notes">
+                                {item.change_notes.map((n, j) => <span key={j} className="diff-note-pill">{n}</span>)}
+                              </div>
+                            )}
+                            <div className="diff-columns">
+                              {[
+                                [result.contract_a, item.risk_a, item.text_a, diff?.left],
+                                [result.contract_b, item.risk_b, item.text_b, diff?.right],
+                              ].map(([docTitle, risk, text, segs], side) => (
+                                <div key={side} className="diff-pane">
+                                  <div className="diff-pane-head">
+                                    <span>{docTitle}</span>
+                                    <span className={`risk-pill risk-${risk || "low"}`}>{(risk || "low").toUpperCase()}</span>
+                                  </div>
+                                  {redline ? <RedlineText segments={segs} /> : <p>{text}</p>}
+                                </div>
+                              ))}
                             </div>
-                            <p>{item.text_b}</p>
+                          </article>
+                        );
+                      })
+                )}
+
+                {(tab === "added" || tab === "removed") && (
+                  result[tab].length === 0
+                    ? <div className="surface-card state-box"><p>No {tab} clauses found.</p></div>
+                    : result[tab].map((item, i) => (
+                        <article key={i} className={`surface-card diff-single diff-${tab}`}>
+                          <div className="diff-card-head">
+                            <span className="clause-category">{tab === "added" ? "Added" : "Removed"} · {item.clause_type}</span>
+                            <span className={`risk-pill risk-${item.risk_level || "low"}`}>{(item.risk_level || "low").toUpperCase()}</span>
                           </div>
-                        </div>
-                      </article>
-                    ))
-                  ))}
+                          <p className="clause-quote">{item.text}</p>
+                        </article>
+                      ))
+                )}
 
-                {activeDiffTab === "added" &&
-                  (result.added.length === 0 ? (
-                    <div className="surface-card state-box muted">
-                      <p>No clauses were newly added in {result.contract_b}.</p>
-                    </div>
-                  ) : (
-                    result.added.map((item, idx) => (
-                      <article key={idx} className="surface-card diff-single diff-added">
-                        <div className="diff-card-head">
-                          <span className="clause-category">Added · {item.clause_type}</span>
-                          <span className={`risk-pill risk-${item.risk_level || "low"}`}>
-                            {(item.risk_level || "low").toUpperCase()}
-                          </span>
-                        </div>
-                        <p className="clause-quote">{item.text}</p>
-                      </article>
-                    ))
-                  ))}
-
-                {activeDiffTab === "removed" &&
-                  (result.removed.length === 0 ? (
-                    <div className="surface-card state-box muted">
-                      <p>No clauses were removed from {result.contract_a}.</p>
-                    </div>
-                  ) : (
-                    result.removed.map((item, idx) => (
-                      <article key={idx} className="surface-card diff-single diff-removed">
-                        <div className="diff-card-head">
-                          <span className="clause-category">Removed · {item.clause_type}</span>
-                          <span className={`risk-pill risk-${item.risk_level || "low"}`}>
-                            {(item.risk_level || "low").toUpperCase()}
-                          </span>
-                        </div>
-                        <p className="clause-quote">{item.text}</p>
-                      </article>
-                    ))
-                  ))}
-
-                {activeDiffTab === "unchanged" &&
-                  (result.unchanged.length === 0 ? (
-                    <div className="surface-card state-box muted">
-                      <p>No identical clauses found between these two agreements.</p>
-                    </div>
-                  ) : (
-                    result.unchanged.map((item, idx) => (
-                      <article key={idx} className="surface-card diff-single">
-                        <div className="diff-card-head">
-                          <span className="clause-category">{item.clause_type}</span>
-                          <span className="mono-caption">Unchanged</span>
-                        </div>
-                        <p className="clause-quote">{item.text_a}</p>
-                      </article>
-                    ))
-                  ))}
+                {tab === "unchanged" && (
+                  result.unchanged.length === 0
+                    ? <div className="surface-card state-box"><p>No identical clauses found.</p></div>
+                    : result.unchanged.map((item, i) => (
+                        <article key={i} className="surface-card diff-single">
+                          <div className="diff-card-head">
+                            <span className="clause-category">{item.clause_type}</span>
+                            <span className="mono-caption">Unchanged</span>
+                          </div>
+                          <p className="clause-quote">{item.text_a}</p>
+                        </article>
+                      ))
+                )}
               </div>
             </div>
           )}

@@ -1,0 +1,129 @@
+const express = require("express");
+const mongoose = require("mongoose");
+const { protect, requireRole } = require("../middleware/authMiddleware");
+const { aiClient } = require("../utils/aiClient");
+const { storageService } = require("../utils/storage");
+const { getRedisStatus } = require("../utils/redisStore");
+const { extractionQueue } = require("../utils/jobQueue");
+const User = require("../models/User");
+const DocumentModel = require("../models/Document");
+const ClauseModel = require("../models/Clause");
+const QuestionAnswerModel = require("../models/QuestionAnswer");
+const FeedbackModel = require("../models/Feedback");
+const AuditLogModel = require("../models/AuditLog");
+
+const router = express.Router();
+
+router.get("/status", protect, async (req, res) => {
+  try {
+    const aiNodes = await aiClient.probeHealth();
+    const pool = aiClient.getPoolStatus();
+    res.json({
+      service: "Legal Contract Agent API",
+      version: "2.1.0",
+      environment: process.env.NODE_ENV || "development",
+      uptimeSeconds: Math.round(process.uptime()),
+      database: { status: mongoose.connection.readyState === 1 ? "connected" : "disconnected" },
+      storage: { provider: storageService.getProviderName() },
+      redis: getRedisStatus(),
+      queue: extractionQueue.getQueueStats(),
+      aiPool: {
+        strategy: pool.strategy,
+        totalNodes: pool.totalNodes,
+        healthyNodes: aiNodes.filter((n) => n.reachable).length,
+        nodes: aiNodes,
+      },
+      security: {
+        authScheme: "Short-lived HS256 JWT + Rotating HttpOnly Refresh Tokens",
+        tenantIsolation: "Strict MongoDB owner/team RBAC + tenant-scoped vector filtering",
+        serviceAuth: Boolean((process.env.INTERNAL_API_KEY || "").trim()),
+        role: req.user.role || "reviewer",
+      },
+    });
+  } catch (err) {
+    console.error("System status error:", err.message);
+    res.status(500).json({ message: "Failed to retrieve system status." });
+  }
+});
+
+router.get("/admin/overview", protect, requireRole("admin"), async (req, res) => {
+  try {
+    const [users, docs, totalClauses, qaRows, fbRows, auditEntries, aiNodes] = await Promise.all([
+      User.find({}).sort({ createdAt: -1 }).limit(25).select("name email role organization lastLoginAt createdAt").lean(),
+      DocumentModel.find({}).select("status riskSummary createdAt").lean(),
+      ClauseModel.countDocuments({}),
+      QuestionAnswerModel.find({}).select("insufficientInformation latencyMs").lean(),
+      FeedbackModel.aggregate([{ $group: { _id: "$rating", count: { $sum: 1 } } }]),
+      AuditLogModel.find({})
+        .sort({ createdAt: -1 })
+        .limit(30)
+        .populate("user", "name email")
+        .select("user action resourceType resourceId summary ipAddress createdAt")
+        .lean(),
+      aiClient.probeHealth(),
+    ]);
+
+    const totalUsers = await User.countDocuments({});
+    const roleCounts = users.reduce((acc, u) => ({ ...acc, [u.role || "reviewer"]: (acc[u.role || "reviewer"] || 0) + 1 }), { admin: 0, counsel: 0, reviewer: 0 });
+    const analyzed = docs.filter((d) => d.status === "completed");
+    const failed = docs.filter((d) => d.status === "failed").length;
+    const avgRiskScore = analyzed.length
+      ? Math.round(analyzed.reduce((s, d) => s + (d.riskSummary?.score || 0), 0) / analyzed.length)
+      : 0;
+
+    const totalQuestions = qaRows.length;
+    const refusalCount = qaRows.filter((q) => q.insufficientInformation).length;
+    const avgLatencyMs = totalQuestions ? Math.round(qaRows.reduce((s, q) => s + (q.latencyMs || 0), 0) / totalQuestions) : 0;
+    const fbUp = fbRows.find((r) => r._id === "up")?.count || 0;
+    const fbDown = fbRows.find((r) => r._id === "down")?.count || 0;
+    const pool = aiClient.getPoolStatus();
+
+    res.json({
+      users: { total: totalUsers, roles: roleCounts, accounts: users },
+      contracts: {
+        total: docs.length,
+        analyzed: analyzed.length,
+        pending: docs.length - analyzed.length - failed,
+        failed,
+        totalClauses,
+        avgRiskScore,
+      },
+      quality: {
+        totalQuestions,
+        groundedCount: totalQuestions - refusalCount,
+        refusalCount,
+        avgLatencyMs,
+        feedbackUp: fbUp,
+        feedbackDown: fbDown,
+        helpfulnessRate: fbUp + fbDown > 0 ? Math.round((fbUp / (fbUp + fbDown)) * 100) : null,
+      },
+      infrastructure: {
+        database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+        storage: storageService.getProviderName(),
+        redis: getRedisStatus(),
+        queue: extractionQueue.getQueueStats(),
+        aiPool: { strategy: pool.strategy, totalNodes: pool.totalNodes, healthyNodes: aiNodes.filter((n) => n.reachable).length, nodes: aiNodes },
+      },
+      auditLogs: auditEntries,
+    });
+  } catch (err) {
+    console.error("Admin overview error:", err.message);
+    res.status(500).json({ message: "Failed to load platform admin overview." });
+  }
+});
+
+router.get("/admin/audit", protect, requireRole("admin"), async (req, res) => {
+  try {
+    const entries = await AuditLogModel.find({})
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .select("user action resourceType resourceId summary ipAddress requestId createdAt")
+      .lean();
+    res.json({ count: entries.length, entries });
+  } catch (err) {
+    console.error("Admin audit error:", err.message);
+    res.status(500).json({ message: "Failed to retrieve admin audit logs." });
+  }
+});
+
+module.exports = router;

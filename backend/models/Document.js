@@ -17,6 +17,17 @@ const documentSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    organization: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Organization",
+      default: null,
+      index: true,
+    },
+    visibility: {
+      type: String,
+      enum: ["private", "team"],
+      default: "private",
+    },
     title: {
       type: String,
       required: true,
@@ -28,7 +39,16 @@ const documentSchema = new mongoose.Schema(
     },
     filePath: {
       type: String,
-      required: true,
+      default: "",
+    },
+    storageProvider: {
+      type: String,
+      enum: ["local", "s3"],
+      default: "local",
+    },
+    storageKey: {
+      type: String,
+      default: "",
     },
     fileType: {
       type: String,
@@ -41,8 +61,13 @@ const documentSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["uploaded", "processing", "completed", "failed"],
+      enum: ["uploaded", "queued", "processing", "completed", "failed"],
       default: "uploaded",
+    },
+    jobProgress: {
+      stage: { type: String, default: "" },
+      percent: { type: Number, default: 0 },
+      message: { type: String, default: "" },
     },
     pageCount: {
       type: Number,
@@ -55,6 +80,10 @@ const documentSchema = new mongoose.Schema(
     totalSections: {
       type: Number,
       default: 0,
+    },
+    ocrUsed: {
+      type: Boolean,
+      default: false,
     },
     vectorIndexed: {
       type: Boolean,
@@ -102,5 +131,6 @@ const documentSchema = new mongoose.Schema(
 );
 
 documentSchema.index({ user: 1, createdAt: -1 });
+documentSchema.index({ organization: 1, visibility: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Document", documentSchema);

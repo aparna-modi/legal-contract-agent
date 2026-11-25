@@ -35,6 +35,14 @@ const clauseSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    plainEnglish: {
+      type: String,
+      default: "",
+    },
+    indianLawRef: {
+      type: String,
+      default: "",
+    },
   },
   {
     timestamps: true,
