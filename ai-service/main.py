@@ -197,6 +197,9 @@ async def root():
             "vector_index": "/api/v1/vector/index", "vector_delete": "/api/v1/vector/delete",
             "vector_stats": "/api/v1/vector/stats", "retrieve": "/api/v1/retrieve",
             "redline": "/api/v1/redline", "playbook_evaluate": "/api/v1/playbook/evaluate",
+            "playbook_generate_rules": "/api/v1/playbook/generate-rules",
+            "draft": "/api/v1/draft", "draft_revise": "/api/v1/draft/revise",
+            "draft_clause": "/api/v1/draft-clause",
         },
     }
 
