@@ -68,4 +68,4 @@ services:
         fromService:
           type: web
           name: legal-contract-ai-service
-          property: url
+          property: hostport
