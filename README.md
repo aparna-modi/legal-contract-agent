@@ -13,15 +13,17 @@ For architecture and security details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 ## Key Features
 
 - **Editorial Contract Workspace & Inspector Drawer**  
-  Clean light editorial workspace featuring a KPI summary strip, filterable/sortable contract table, and a 4-tab slide-over inspector (**Overview**, **Clauses & Risks**, **Document Viewer**, **Ask Contract**).
-- **Plain-English Clause Review, Risk Scoring & Missing Protections**  
-  Classifies clauses across 14 legal categories, scores overall risk (`0–100`), highlights missing standard protections (Termination, Liability Cap, Confidentiality, Governing Law, etc.), and explains each clause alongside relevant Indian statutory references.
-- **Citation-Backed Contract Q&A & Library Search (`Ctrl+K`)**  
-  Hybrid dense + lexical retrieval with full-document context for short agreements and chunked retrieval for 30+ page agreements. Answers quote the source clause, link directly to the page in the viewer, and say *"Not found in the contract"* when a document is silent. Includes a self-healing vector index that rebuilds automatically from MongoDB after ephemeral worker restarts.
+  Warm-parchment light editorial workspace crafted with Framer Motion transitions, layered paper shadows, tabular numerals, a filterable/sortable contract table, and a 4-tab slide-over inspector (**Overview**, **Clauses & Risks**, **Document Viewer**, **Ask Contract**).
+- **AI Contract Drafting Studio (`/draft`)**  
+  Generate structured, section-numbered commercial drafts (**MSA**, **Mutual NDA**, **Employment**, **Independent Contractor**, **Commercial Lease**) tailored to your jurisdiction, parties, term, payment schedule, and negotiation guardrails — with commercial review notes, bracketed placeholders checklist, Markdown export, and one-click **Save & Analyze** into your workspace.
+- **Plain-English Clause Review, Semantic Risk Elevation & Obligations Ledger**  
+  Classifies clauses across 14 legal categories, elevates subtle semantic risks, scores overall risk (`0–100`), extracts a structured **Obligations & Deadlines** schedule (`Party | Obligation | Deadline | Reference`), flags missing standard protections, and explains each clause alongside relevant Indian statutory references.
+- **Multi-Turn Citation-Backed Contract Q&A Chat & Library Search (`Ctrl+K`)**  
+  Conversational Q&A workspace retaining up to 6 turns of grounded history, backed by hybrid dense + lexical retrieval (full-document context for short agreements and chunked retrieval for 30+ page agreements). Answers quote the source clause, link directly to the page in the viewer, and say *"Not found in the contract"* when a document is silent. Includes a self-healing vector index that rebuilds automatically from MongoDB after ephemeral worker restarts.
 - **Side-by-Side Redline Comparison & Fallback Clause Drafting**  
-  Compares two contract versions with semantic clause alignment, word-level redline diffs, numeric/risk-shift notes, and one-click AI-drafted fallback wording for medium- and high-risk clauses.
-- **Jurisdiction Playbooks**  
-  Includes one-click rule packs (India Commercial, US Commercial/SaaS, UK & EU GDPR, Freelancer/Contractor) plus custom rules and compliance scoring.
+  Compares two contract versions with semantic clause alignment, word-level redline diffs, numeric/risk-shift notes, Markdown diff export, and one-click AI-drafted fallback wording for medium- and high-risk clauses.
+- **Jurisdiction Playbooks with Remediation Guidance**  
+  Includes one-click rule packs (India Commercial, US Commercial/SaaS, UK & EU GDPR, Freelancer/Contractor) plus custom rules, compliance scoring, and actionable remediation recommendations for every failed or warned rule.
 - **Security, Multi-Tenancy & Exports**  
   Short-lived HS256 JWTs, rotating `HttpOnly` refresh cookies with replay-theft detection and origin CSRF checks, magic-byte upload verification, workspace-scoped RBAC (`admin`, `counsel`, `reviewer`), GridFS/S3 persistent file storage, printable PDF reports, and Markdown exports.
 
@@ -31,7 +33,7 @@ For architecture and security details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 | Layer | Technology |
 | --- | --- |
-| Frontend | React 19, Vite 8, React Router v7, Newsreader + Inter + JetBrains Mono |
+| Frontend | React 19, Vite 8, React Router v7, Framer Motion, Newsreader + Inter + JetBrains Mono |
 | API Gateway | Node.js 20, Express 5, Mongoose 9 (MongoDB Atlas + GridFS / S3), Helmet, Redis/memory rate limiting |
 | AI Microservice | Python 3.13, FastAPI, Google Gemini SDK (`google-genai`), ChromaDB / Qdrant, `pypdf`, `python-docx`, `tiktoken` |
 | Deployment | Render Blueprint (`render.yaml`), Vercel (`frontend/vercel.json`), Docker Compose + Nginx LB |
@@ -129,7 +131,7 @@ npm run dev
 1. **Extraction & Chunking (`POST /api/v1/extract`)**: Parses PDF pages (`pypdf`, with automatic Gemini multimodal OCR if `< 40` chars are extracted), DOCX paragraphs/tables (`python-docx`), or structured TXT, strips repeating headers/footers, classifies clauses into 14 legal categories, flags high/medium risks and missing core clauses, and embeds chunks with `gemini-embedding-001` (384-dim L2-normalized) into a tenant-scoped vector index (`user_id` + `document_id`).
 2. **Structured Analysis (`POST /api/v1/analyze`)**: Samples head, middle, and closing sections on long (30+ page) contracts so trailing clauses aren't lost, treats contract text strictly as untrusted data inside `<contract_document>` tags, and generates structured JSON summaries, key facts, plain-English clause explanations, and statutory references.
 3. **Grounded Q&A (`POST /api/v1/retrieve`)**: Runs hybrid dense + IDF/synonym lexical reranking, includes full document context when under 32k chars, instructs the model to quote source clauses verbatim and never invent statutes or claim to be a lawyer, and returns `"Not found in the contract"` when evidence is absent.
-4. **Comparison, Redlines & Playbooks**: Aligns clauses semantically across two contracts, drafts balanced fallback clauses with playbook guidance, and scores compliance against configurable firm rules.
+4. **Comparison, Redlines, Playbooks & Drafting (`POST /api/v1/draft`)**: Aligns clauses semantically across two contracts, drafts balanced fallback clauses and full section-numbered agreements from templates with untrusted `<draft_parameters>` prompt-injection guards, and scores compliance with concrete remediation guidance.
 
 ---
 

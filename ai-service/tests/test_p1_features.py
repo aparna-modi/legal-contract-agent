@@ -108,6 +108,38 @@ def test_playbook_evaluation_endpoint():
     assert data["summary"]["passed"] == 1  # max_high_risk passed (1 <= 2)
     assert data["summary"]["failed"] >= 2  # missing liability + forbidden keyword
     assert 0 <= data["compliance_score"] <= 100
+    failed_items = [r for r in data["results"] if r["status"] != "pass"]
+    assert all(r.get("remediation") for r in failed_items)
+
+
+def test_contract_drafting_templates_and_fallback(monkeypatch):
+    monkeypatch.setattr(llm_client, "generate_structured", lambda **kwargs: None)
+
+    tpl_res = client.get("/api/v1/draft/templates")
+    assert tpl_res.status_code == 200
+    templates = tpl_res.json()["templates"]
+    assert len(templates) >= 5
+    assert any(t["id"] == "msa" for t in templates)
+
+    res = client.post(
+        "/api/v1/draft",
+        json={
+            "contract_type": "nda",
+            "title": "Mutual NDA — Test Corp",
+            "party_a": "Alpha Labs",
+            "party_b": "Beta Ventures",
+            "jurisdiction": "India (Indian Contract Act, 1872)",
+            "term_duration": "3 years",
+            "notice_period": "15 days written notice",
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert "Alpha Labs" in body["full_text"]
+    assert "Beta Ventures" in body["full_text"]
+    assert "not legal advice" in body["disclaimer"].lower()
+    assert len(body["sections_included"]) >= 5
+    assert len(body["negotiation_notes"]) >= 1
 
 
 def test_prometheus_metrics_endpoint():
