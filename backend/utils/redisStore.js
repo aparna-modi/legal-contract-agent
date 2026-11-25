@@ -36,7 +36,9 @@ async function cacheGetJson(key) {
     try {
       const raw = await redisClient.get(`lca:cache:${key}`);
       return raw ? JSON.parse(raw) : null;
-    } catch {}
+    } catch (err) {
+      console.warn("Redis cache GET fallback to memory:", err.message);
+    }
   }
   const hit = memoryCache.get(key);
   if (!hit) return null;
@@ -47,7 +49,9 @@ async function cacheGetJson(key) {
 async function cacheSetJson(key, value, ttlSeconds = 30) {
   initRedis();
   if (redisClient && redisReady) {
-    try { await redisClient.set(`lca:cache:${key}`, JSON.stringify(value), "EX", ttlSeconds); return; } catch {}
+    try { await redisClient.set(`lca:cache:${key}`, JSON.stringify(value), "EX", ttlSeconds); return; } catch (err) {
+      console.warn("Redis cache SET fallback to memory:", err.message);
+    }
   }
   memoryCache.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
   if (memoryCache.size > 500) memoryCache.delete(memoryCache.keys().next().value);
@@ -70,6 +74,16 @@ class HybridRateLimitStore {
     initRedis();
   }
 
+  _pruneExpired(now) {
+    if (this.localHits.size < 2000) return;
+    for (const [k, entry] of this.localHits) {
+      if (entry.resetMs <= now) this.localHits.delete(k);
+    }
+    while (this.localHits.size > 5000) {
+      this.localHits.delete(this.localHits.keys().next().value);
+    }
+  }
+
   async increment(key) {
     const fullKey = `lca:${this.prefix}:${key}`;
     if (redisClient && redisReady) {
@@ -78,9 +92,12 @@ class HybridRateLimitStore {
         if (count === 1) await redisClient.pexpire(fullKey, this.windowMs);
         const pttl = await redisClient.pttl(fullKey);
         return { totalHits: count, resetTime: new Date(Date.now() + (pttl > 0 ? pttl : this.windowMs)) };
-      } catch {}
+      } catch (err) {
+        console.warn("Redis rate-limit fallback to memory:", err.message);
+      }
     }
     const now = Date.now();
+    this._pruneExpired(now);
     const cur = this.localHits.get(fullKey);
     if (!cur || cur.resetMs <= now) {
       const resetMs = now + this.windowMs;

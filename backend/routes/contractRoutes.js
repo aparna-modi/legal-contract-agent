@@ -521,7 +521,7 @@ router.post("/search", protect, aiLimiter, async (req, res) => {
       latencyMs: Date.now() - started,
     }).catch(() => null);
 
-    recordAudit(req, { action: "search", resourceType: "library", summary: `Searched library: "${q.slice(0, 70)}"` });
+    recordAudit(req, { action: "search", resourceType: "library", summary: `Ran semantic search across contract library (${data.results?.length || 0} matches)` });
     res.json({ qaId: qa?._id || null, ...data });
   } catch (err) {
     console.error("Library search error:", err.message);
@@ -793,6 +793,7 @@ router.post("/:id/clauses/:clauseId/suggest-redline", protect, aiLimiter, async 
       (r) =>
         r.enabled &&
         r.guidance &&
+        r.ruleType === "require_clause" &&
         (clause.clauseType.toLowerCase().includes(r.target.toLowerCase()) ||
           r.name.toLowerCase().includes(clause.clauseType.toLowerCase()))
     );
@@ -1010,7 +1011,7 @@ router.post("/:id/ask", protect, aiLimiter, async (req, res) => {
       action: "ask",
       resourceType: "contract",
       resourceId: contract._id,
-      summary: `Asked "${contract.title}": "${q.slice(0, 65)}"${cached ? " (cached)" : ""}`,
+      summary: `Asked question on "${contract.title}"${cached ? " (cached)" : ""}`,
     });
     res.json({
       qaId: qa?._id || null,

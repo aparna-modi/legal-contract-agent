@@ -423,9 +423,9 @@ This Agreement is governed by the laws of California.`;
   const adminOverviewRes = await fetch(`${BACKEND_URL}/api/system/admin/overview`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  assert(adminOverviewRes.status === 200, "GET /api/system/admin/overview returns cross-account platform stats for admin");
+  assert(adminOverviewRes.status === 200, "GET /api/system/admin/overview returns workspace-scoped stats for workspace admin");
   const adminOverview = await adminOverviewRes.json();
-  assert(adminOverview.users?.total >= 2 && adminOverview.contracts?.total >= 2, "Admin overview aggregates accounts and contracts");
+  assert(adminOverview.scope === "workspace" && adminOverview.users?.total === 1 && adminOverview.contracts?.total >= 2, "Workspace admin overview is strictly isolated from other tenants");
 
   const metricsRes = await fetch(`${BACKEND_URL}/metrics`);
   assert(metricsRes.status === 200, "GET /metrics exposes Prometheus telemetry");

@@ -46,15 +46,45 @@ router.get("/status", protect, async (req, res) => {
   }
 });
 
+function isPlatformAdmin(user) {
+  if (!user || user.role !== "admin") return false;
+  const allowlist = (process.env.PLATFORM_ADMIN_EMAILS || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  return allowlist.includes(String(user.email || "").trim().toLowerCase());
+}
+
 router.get("/admin/overview", protect, requireRole("admin"), async (req, res) => {
   try {
-    const [users, docs, totalClauses, qaRows, fbRows, auditEntries, aiNodes] = await Promise.all([
-      User.find({}).sort({ createdAt: -1 }).limit(25).select("name email role organization lastLoginAt createdAt").lean(),
-      DocumentModel.find({}).select("status riskSummary createdAt").lean(),
-      ClauseModel.countDocuments({}),
-      QuestionAnswerModel.find({}).select("insufficientInformation latencyMs").lean(),
-      FeedbackModel.aggregate([{ $group: { _id: "$rating", count: { $sum: 1 } } }]),
-      AuditLogModel.find({})
+    // Only explicit PLATFORM_ADMIN_EMAILS see global cross-tenant data;
+    // workspace admins are strictly scoped to their own organization/account.
+    const globalScope = isPlatformAdmin(req.user);
+    const userFilter = globalScope
+      ? {}
+      : req.user.organizationId
+        ? { organizationId: req.user.organizationId }
+        : { _id: req.user._id };
+
+    const scopedUsers = await User.find(userFilter).select("_id").lean();
+    const scopedUserIds = scopedUsers.map((u) => u._id);
+    const docFilter = globalScope
+      ? {}
+      : req.user.organizationId
+        ? { $or: [{ organization: req.user.organizationId }, { user: { $in: scopedUserIds } }] }
+        : { user: req.user._id };
+    const qaFilter = globalScope ? {} : { user: { $in: scopedUserIds } };
+    const auditFilter = globalScope ? {} : { user: { $in: scopedUserIds } };
+
+    const [users, docs, qaRows, fbRows, auditEntries, aiNodes] = await Promise.all([
+      User.find(userFilter).sort({ createdAt: -1 }).limit(25).select("name email role organization lastLoginAt createdAt").lean(),
+      DocumentModel.find(docFilter).select("_id status riskSummary createdAt").lean(),
+      QuestionAnswerModel.find(qaFilter).select("insufficientInformation latencyMs").lean(),
+      FeedbackModel.aggregate([
+        ...(globalScope ? [] : [{ $match: { user: { $in: scopedUserIds } } }]),
+        { $group: { _id: "$rating", count: { $sum: 1 } } },
+      ]),
+      AuditLogModel.find(auditFilter)
         .sort({ createdAt: -1 })
         .limit(30)
         .populate("user", "name email")
@@ -63,7 +93,10 @@ router.get("/admin/overview", protect, requireRole("admin"), async (req, res) =>
       aiClient.probeHealth(),
     ]);
 
-    const totalUsers = await User.countDocuments({});
+    const totalClauses = docs.length
+      ? await ClauseModel.countDocuments(globalScope ? {} : { document: { $in: docs.map((d) => d._id) } })
+      : 0;
+    const totalUsers = await User.countDocuments(userFilter);
     const roleCounts = users.reduce((acc, u) => ({ ...acc, [u.role || "reviewer"]: (acc[u.role || "reviewer"] || 0) + 1 }), { admin: 0, counsel: 0, reviewer: 0 });
     const analyzed = docs.filter((d) => d.status === "completed");
     const failed = docs.filter((d) => d.status === "failed").length;
@@ -79,6 +112,7 @@ router.get("/admin/overview", protect, requireRole("admin"), async (req, res) =>
     const pool = aiClient.getPoolStatus();
 
     res.json({
+      scope: globalScope ? "platform" : "workspace",
       users: { total: totalUsers, roles: roleCounts, accounts: users },
       contracts: {
         total: docs.length,
@@ -108,18 +142,26 @@ router.get("/admin/overview", protect, requireRole("admin"), async (req, res) =>
     });
   } catch (err) {
     console.error("Admin overview error:", err.message);
-    res.status(500).json({ message: "Failed to load platform admin overview." });
+    res.status(500).json({ message: "Failed to load admin overview." });
   }
 });
 
 router.get("/admin/audit", protect, requireRole("admin"), async (req, res) => {
   try {
-    const entries = await AuditLogModel.find({})
+    const globalScope = isPlatformAdmin(req.user);
+    let auditFilter = {};
+    if (!globalScope) {
+      const scopedUsers = req.user.organizationId
+        ? await User.find({ organizationId: req.user.organizationId }).select("_id").lean()
+        : [{ _id: req.user._id }];
+      auditFilter = { user: { $in: scopedUsers.map((u) => u._id) } };
+    }
+    const entries = await AuditLogModel.find(auditFilter)
       .sort({ createdAt: -1 })
       .limit(50)
       .select("user action resourceType resourceId summary ipAddress requestId createdAt")
       .lean();
-    res.json({ count: entries.length, entries });
+    res.json({ scope: globalScope ? "platform" : "workspace", count: entries.length, entries });
   } catch (err) {
     console.error("Admin audit error:", err.message);
     res.status(500).json({ message: "Failed to retrieve admin audit logs." });

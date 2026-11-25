@@ -12,8 +12,11 @@ const router = express.Router();
 router.get("/overview", protect, async (req, res) => {
   try {
     const userId = req.user._id;
+    const docFilter = req.user.organizationId
+      ? { $or: [{ user: userId }, { organization: req.user.organizationId, visibility: "team" }] }
+      : { user: userId };
     const [docs, qaList, fbRows, recentActivity] = await Promise.all([
-      DocumentModel.find({ user: userId }).select("title fileName status riskSummary missingClauses totalTokens pageCount createdAt").lean(),
+      DocumentModel.find(docFilter).select("title fileName status riskSummary missingClauses totalTokens pageCount createdAt").lean(),
       QuestionAnswerModel.find({ user: userId }).select("insufficientInformation confidence latencyMs").lean(),
       FeedbackModel.aggregate([{ $match: { user: userId } }, { $group: { _id: "$rating", count: { $sum: 1 } } }]),
       AuditLogModel.find({ user: userId }).sort({ createdAt: -1 }).limit(12).select("action resourceType resourceId summary createdAt").lean(),

@@ -49,7 +49,21 @@ async function fetchWithAuth(path, { method = "GET", token, headers = {}, body, 
     throw new Error("Unable to reach the API server. Please check your connection and try again.");
   }
 
-  if (response.status === 401 && token && !_retried && !path.startsWith("/api/auth/")) {
+  const skipRefreshPaths = [
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/refresh",
+    "/api/auth/logout",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
+  ];
+  const shouldRefresh =
+    response.status === 401 &&
+    token &&
+    !_retried &&
+    !skipRefreshPaths.some((p) => path.startsWith(p));
+
+  if (shouldRefresh) {
     const freshToken = await attemptSilentRefresh();
     if (freshToken) {
       return fetchWithAuth(path, { method, token: freshToken, headers, body, _retried: true });

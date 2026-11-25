@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 
@@ -134,7 +135,12 @@ app.get("/health/ready", (req, res) => {
 
 app.get("/metrics", (req, res) => {
   const expectedKey = (process.env.INTERNAL_API_KEY || "").trim();
-  if (isProd && expectedKey && req.headers["x-internal-service-key"] !== expectedKey) {
+  const providedKey = String(req.headers["x-internal-service-key"] || "").trim();
+  if (isProd) {
+    if (!expectedKey || providedKey.length !== expectedKey.length || !crypto.timingSafeEqual(Buffer.from(providedKey), Buffer.from(expectedKey))) {
+      return res.status(401).json({ message: "Unauthorized metrics scrape." });
+    }
+  } else if (expectedKey && providedKey !== expectedKey) {
     return res.status(401).json({ message: "Unauthorized metrics scrape." });
   }
   res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");

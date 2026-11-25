@@ -6,6 +6,15 @@
 const FROM_ADDRESS = process.env.EMAIL_FROM || "Legal Contract Agent <security@legalcontractagent.local>";
 const APP_URL = (process.env.APP_URL || "http://localhost:5173").replace(/\/+$/, "");
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 async function sendEmail({ to, subject, html, text }) {
   const resendKey = (process.env.RESEND_API_KEY || "").trim();
 
@@ -44,11 +53,12 @@ async function sendEmail({ to, subject, html, text }) {
 
 async function sendPasswordResetEmail(to, rawToken) {
   const resetUrl = `${APP_URL}/reset-password?token=${encodeURIComponent(rawToken)}`;
+  const safeUrl = escapeHtml(resetUrl);
   return sendEmail({
     to,
     subject: "Reset your Legal Contract Agent password",
     text: `Use the following link within 30 minutes to reset your password:\n${resetUrl}`,
-    html: `<p>Use the link below within 30 minutes to reset your password:</p><p><a href="${resetUrl}">${resetUrl}</a></p>`,
+    html: `<p>Use the link below within 30 minutes to reset your password:</p><p><a href="${safeUrl}">${safeUrl}</a></p>`,
   });
 }
 
@@ -58,7 +68,7 @@ async function sendTeamInviteEmail(to, orgName, inviterName, inviteCode) {
     to,
     subject: `${inviterName} invited you to ${orgName} on Legal Contract Agent`,
     text: `${inviterName} invited you to collaborate in "${orgName}". Join with invite code ${inviteCode} at ${joinUrl}`,
-    html: `<p><strong>${inviterName}</strong> invited you to collaborate in <strong>${orgName}</strong>.</p><p>Invite code: <code>${inviteCode}</code></p><p><a href="${joinUrl}">Open workspace</a></p>`,
+    html: `<p><strong>${escapeHtml(inviterName)}</strong> invited you to collaborate in <strong>${escapeHtml(orgName)}</strong>.</p><p>Invite code: <code>${escapeHtml(inviteCode)}</code></p><p><a href="${escapeHtml(joinUrl)}">Open workspace</a></p>`,
   });
 }
 

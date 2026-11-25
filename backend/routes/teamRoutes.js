@@ -77,25 +77,17 @@ router.post("/invite", protect, async (req, res) => {
 
     const normalized = String(email).trim().toLowerCase();
     const target = await User.findOne({ email: normalized });
-    let status = "invite_sent";
-
-    if (target) {
-      if (org.members.some((m) => String(m.user) === String(target._id))) {
-        return res.status(409).json({ message: "This user is already a member of your workspace." });
-      }
-      org.members.push({ user: target._id, role, joinedAt: new Date() });
-      await org.save();
-      await User.findByIdAndUpdate(target._id, { $set: { organizationId: org._id, organization: org.name, role } });
-      status = "added_existing_user";
+    if (target && org.members.some((m) => String(m.user) === String(target._id))) {
+      return res.status(409).json({ message: "This user is already a member of your workspace." });
     }
 
+    // Never forcibly reassign an existing account's organization without consent;
+    // deliver the invite code so the colleague joins explicitly via POST /api/team/join.
     await sendTeamInviteEmail(normalized, org.name, req.user.name, org.inviteCode);
     recordAudit(req, { action: "team_invite", resourceType: "organization", resourceId: org._id, summary: `Invited ${normalized} as ${role.toUpperCase()}` });
     res.status(201).json({
-      message: status === "added_existing_user"
-        ? `${target.name} was added to ${org.name} as ${role}.`
-        : `Invitation sent to ${normalized} with invite code ${org.inviteCode}.`,
-      status,
+      message: `Invitation sent to ${normalized}. They can join "${org.name}" using the workspace invite code.`,
+      status: "invite_sent",
       inviteCode: org.inviteCode,
     });
   } catch (err) {

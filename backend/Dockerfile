@@ -9,8 +9,9 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY . .
-RUN mkdir -p /app/uploads
+RUN mkdir -p /app/uploads && chown -R node:node /app/uploads
 
+USER node
 EXPOSE 5000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

@@ -21,6 +21,19 @@ const MAX_FAILED_LOGINS = Number(process.env.MAX_FAILED_LOGINS || 5);
 const LOCKOUT_MS = Number(process.env.LOCKOUT_DURATION_MS || 15 * 60 * 1000);
 const DUMMY_HASH = "$2a$12$CwTycUXWue0Thq9StjUM0uJ8K9q8bH9fM8N9f7C8eP3vZ1dO2rG6e";
 
+function verifyCookieOrigin(req, res, next) {
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  const isProd = process.env.NODE_ENV === "production";
+  if (!isProd && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return next();
+  const allowed = (process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  if (allowed.includes(origin) || allowed.includes("*")) return next();
+  return res.status(403).json({ code: "CSRF_ORIGIN_BLOCKED", message: "Cross-origin cookie request blocked." });
+}
+
 async function issueSession(req, res, user, family = crypto.randomUUID()) {
   const accessToken = signAccessToken(user);
   const rawRefresh = generateRefreshToken();
@@ -125,7 +138,7 @@ router.post("/login", async (req, res) => {
   }
 });
 
-router.post("/refresh", async (req, res) => {
+router.post("/refresh", verifyCookieOrigin, async (req, res) => {
   try {
     const raw = parseCookies(req)[REFRESH_COOKIE_NAME] || req.body?.refreshToken;
     if (!raw) return res.status(401).json({ code: "REFRESH_MISSING", message: "Refresh session token not provided." });
@@ -171,7 +184,7 @@ router.post("/refresh", async (req, res) => {
   }
 });
 
-router.post("/logout", async (req, res) => {
+router.post("/logout", verifyCookieOrigin, async (req, res) => {
   try {
     const raw = parseCookies(req)[REFRESH_COOKIE_NAME] || req.body?.refreshToken;
     if (raw) {
