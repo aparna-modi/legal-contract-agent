@@ -167,6 +167,7 @@ export default function LibrarySearchModal({ initialQuery, token, onClose }) {
                   ))}
                 </div>
               )}
+              <p className="legal-disclaimer">AI-assisted search across your uploaded contracts — not legal advice.</p>
             </div>
           )}
         </div>

@@ -119,12 +119,12 @@ export default function Analytics() {
               </div>
               <div className="donut-layout">
                 <svg className="donut-svg" viewBox="0 0 110 110" role="img" aria-label="Risk distribution donut chart">
-                  <circle cx="55" cy="55" r="42" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="14" />
+                  <circle cx="55" cy="55" r="42" fill="none" stroke="#e4e1d8" strokeWidth="14" />
                   {totalRisk > 0 && (
                     <>
-                      <circle cx="55" cy="55" r="42" fill="none" stroke="#10b981" strokeWidth="14" strokeDasharray={`${lowArc} ${C}`} strokeDashoffset={0} transform="rotate(-90 55 55)" />
-                      <circle cx="55" cy="55" r="42" fill="none" stroke="#f59e0b" strokeWidth="14" strokeDasharray={`${medArc} ${C}`} strokeDashoffset={-lowArc} transform="rotate(-90 55 55)" />
-                      <circle cx="55" cy="55" r="42" fill="none" stroke="#ef4444" strokeWidth="14" strokeDasharray={`${highArc} ${C}`} strokeDashoffset={-(lowArc + medArc)} transform="rotate(-90 55 55)" />
+                      <circle cx="55" cy="55" r="42" fill="none" stroke="#079455" strokeWidth="14" strokeDasharray={`${lowArc} ${C}`} strokeDashoffset={0} transform="rotate(-90 55 55)" />
+                      <circle cx="55" cy="55" r="42" fill="none" stroke="#d97706" strokeWidth="14" strokeDasharray={`${medArc} ${C}`} strokeDashoffset={-lowArc} transform="rotate(-90 55 55)" />
+                      <circle cx="55" cy="55" r="42" fill="none" stroke="#d92d20" strokeWidth="14" strokeDasharray={`${highArc} ${C}`} strokeDashoffset={-(lowArc + medArc)} transform="rotate(-90 55 55)" />
                     </>
                   )}
                   <text x="55" y="52" textAnchor="middle" className="donut-number">{portfolio.analyzedContracts}</text>

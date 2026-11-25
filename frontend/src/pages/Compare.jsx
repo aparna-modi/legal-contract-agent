@@ -170,8 +170,9 @@ export default function Compare() {
                   </div>
                 )}
                 {result.recommendation && (
-                  <div className="recommendation-box"><strong>Counsel Takeaway:</strong> {result.recommendation}</div>
+                  <div className="recommendation-box"><strong>Review Takeaway:</strong> {result.recommendation}</div>
                 )}
+                <p className="legal-disclaimer">AI-assisted revision diff for informational review only — not legal advice.</p>
               </section>
 
               <div className="diff-toolbar-row">

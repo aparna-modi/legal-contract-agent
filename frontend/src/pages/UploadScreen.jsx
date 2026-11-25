@@ -127,7 +127,16 @@ export default function UploadScreen() {
 
         <div
           className={`dropzone ${dragging ? "dragging" : ""} ${file ? "has-file" : ""}`}
+          role="button"
+          tabIndex={busy ? -1 : 0}
+          aria-label="Upload contract file (PDF, DOCX, or TXT)"
           onClick={() => !busy && inputRef.current?.click()}
+          onKeyDown={(e) => {
+            if (!busy && (e.key === "Enter" || e.key === " ")) {
+              e.preventDefault();
+              inputRef.current?.click();
+            }
+          }}
           onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
           onDragLeave={(e) => { e.preventDefault(); setDragging(false); }}
           onDrop={(e) => { e.preventDefault(); setDragging(false); selectFile(e.dataTransfer.files?.[0]); }}

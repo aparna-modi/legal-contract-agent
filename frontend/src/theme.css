@@ -1,0 +1,66 @@
+/* Design tokens matching the editorial light theme from the reference video. */
+:root {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Editorial light surfaces */
+  --bg-canvas: #f7f6f2;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f1efe9;
+  --bg-hover: #faf9f5;
+  --bg-input: #ffffff;
+
+  /* Borders */
+  --border: #e4e1d8;
+  --border-strong: #d1cdc1;
+  --border-focus: #0f6e65;
+
+  /* Typography ink (WCAG 2.2 AA contrast >= 4.5:1 on both #ffffff and #f7f6f2) */
+  --ink-primary: #14181f;
+  --ink-secondary: #4a5260;
+  --ink-muted: #5c6473;
+
+  /* Brand & editorial legal teal accent */
+  --brand: #182230;
+  --brand-hover: #0e1621;
+  --accent: #0f6e65;
+  --accent-hover: #0b5850;
+  --accent-bg: #eef7f6;
+  --accent-border: #bfe0dc;
+
+  /* Semantic risk levels */
+  --risk-high: #b42318;
+  --risk-high-solid: #d92d20;
+  --risk-high-bg: #fef3f2;
+  --risk-high-border: #fecdca;
+
+  --risk-med: #9a5b07;
+  --risk-med-solid: #d97706;
+  --risk-med-bg: #fffaeb;
+  --risk-med-border: #fedf89;
+
+  --risk-low: #067647;
+  --risk-low-solid: #079455;
+  --risk-low-bg: #ecfdf3;
+  --risk-low-border: #abefc6;
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* Paper-like shadows */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 8px 24px -6px rgba(16, 24, 40, 0.08), 0 2px 6px rgba(16, 24, 40, 0.04);
+  --shadow-lg: 0 20px 50px -12px rgba(16, 24, 40, 0.18);
+}

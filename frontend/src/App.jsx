@@ -17,7 +17,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 
 const NAV_LINKS = [
-  { to: "/", label: "Dashboard", end: true },
+  { to: "/", label: "Workspace", end: true },
   { to: "/upload", label: "Upload" },
   { to: "/compare", label: "Compare" },
   { to: "/playbook", label: "Playbook" },
@@ -74,6 +74,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <div className="app-shell">
+        <a href="#main-content" className="skip-link">Skip to main content</a>
         <header className="topbar">
           <div className="topbar-inner">
             <div className="topbar-left">
@@ -131,20 +132,20 @@ export default function App() {
 
                   <button type="button" className="btn btn-ghost btn-sm" onClick={handleLogout}>
                     <LogOutIcon size={15} />
-                    <span>Logout</span>
+                    <span>Sign out</span>
                   </button>
                 </div>
               ) : (
                 <div className="auth-nav">
-                  <NavLink to="/login" className="btn btn-ghost btn-sm">Login</NavLink>
-                  <NavLink to="/register" className="btn btn-primary btn-sm">Register</NavLink>
+                  <NavLink to="/login" className="btn btn-ghost btn-sm">Sign in</NavLink>
+                  <NavLink to="/register" className="btn btn-primary btn-sm">Get started</NavLink>
                 </div>
               )}
             </div>
           </div>
         </header>
 
-        <main className="main-content">
+        <main id="main-content" className="main-content" tabIndex={-1}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/upload" element={<ProtectedRoute><UploadScreen /></ProtectedRoute>} />
@@ -170,6 +171,13 @@ export default function App() {
             />
           </Routes>
         </main>
+
+        <footer className="app-footer">
+          <div className="app-footer-inner">
+            <span>Legal Contract Agent — Document-grounded first-pass contract review assistant.</span>
+            <span>Not legal advice. Consult a qualified attorney before signing or relying on any agreement.</span>
+          </div>
+        </footer>
 
         {searchOpen && isAuthenticated && (
           <LibrarySearchModal initialQuery="" token={token} onClose={() => setSearchOpen(false)} />

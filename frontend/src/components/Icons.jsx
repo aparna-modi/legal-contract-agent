@@ -13,10 +13,10 @@ const svgProps = (size = 16, className = "") => ({
 
 export const BrandMark = ({ size = 26 }) => (
   <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden="true">
-    <rect width="32" height="32" rx="8" fill="#4f46e5" />
+    <rect width="32" height="32" rx="8" fill="#182230" />
     <path d="M9.5 8.5h8.5l4.5 4.5v10.5a1 1 0 0 1-1 1h-12a1 1 0 0 1-1-1v-14a1 1 0 0 1 1-1Z" stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" />
     <path d="M18 8.5V13h4.5" stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" />
-    <path d="M12.5 16.5h7M12.5 20h4.5" stroke="#67e8f9" strokeWidth="1.6" strokeLinecap="round" />
+    <path d="M12.5 16.5h7M12.5 20h4.5" stroke="#5eead4" strokeWidth="1.6" strokeLinecap="round" />
   </svg>
 );
 

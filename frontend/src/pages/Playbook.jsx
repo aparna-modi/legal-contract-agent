@@ -175,6 +175,7 @@ export default function Playbook() {
                 </div>
               ))}
             </div>
+            <p className="legal-disclaimer">Automated playbook checks flag potential rule deviations for review — not legal advice.</p>
           </div>
         )}
       </section>
