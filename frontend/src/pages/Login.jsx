@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { authApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { BrandMark, CheckCircleIcon, EyeIcon, EyeOffIcon } from "../components/Icons";
+import { PageReveal } from "../components/Motion";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -34,7 +35,7 @@ export default function Login() {
   };
 
   return (
-    <div className="auth-split">
+    <PageReveal className="auth-split">
       <aside className="auth-aside">
         <BrandMark size={32} />
         <h2 className="auth-aside-title">Grounded contract review without guesswork.</h2>
@@ -128,6 +129,6 @@ export default function Login() {
           </Link>
         </p>
       </section>
-    </div>
+    </PageReveal>
   );
 }

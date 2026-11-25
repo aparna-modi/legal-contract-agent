@@ -167,6 +167,11 @@ export const contractsApi = {
       token,
       body: { contractAId, contractBId },
     }),
+  draftTemplates: (token) => request("/api/contracts/draft/templates", { token }),
+  draft: (token, payload) =>
+    request("/api/contracts/draft", { method: "POST", token, body: payload }),
+  saveDraft: (token, payload) =>
+    request("/api/contracts/draft/save", { method: "POST", token, body: payload }),
   vectorStats: (token) => request("/api/contracts/stats/vectors", { token }),
   remove: (token, id) => request(`/api/contracts/${id}`, { method: "DELETE", token }),
   fetchFileBlobUrl: async (token, id) => {

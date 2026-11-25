@@ -6,6 +6,7 @@ import {
   CheckCircleIcon, ClockIcon, LayersIcon, LockIcon, LogOutIcon,
   PlusIcon, RefreshIcon, ServerIcon, ShieldCheckIcon, TrashIcon,
 } from "../components/Icons";
+import { PageReveal } from "../components/Motion";
 
 const fmtTime = (ts) =>
   ts ? new Date(ts).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -139,7 +140,7 @@ export default function SecuritySettings() {
   const strength = passwordStrength(pw.next);
 
   return (
-    <div className="workspace-page">
+    <PageReveal className="workspace-page">
       <div className="page-header">
         <div>
           <h1 className="page-heading">Account, Team &amp; Security</h1>
@@ -379,6 +380,6 @@ export default function SecuritySettings() {
           </>
         )}
       </section>
-    </div>
+    </PageReveal>
   );
 }

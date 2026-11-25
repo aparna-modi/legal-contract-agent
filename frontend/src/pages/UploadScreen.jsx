@@ -1,8 +1,11 @@
 import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { motion } from "framer-motion";
 import { contractsApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { CheckCircleIcon, FileTextIcon, LockIcon, UploadIcon, XIcon } from "../components/Icons";
+import { PageReveal } from "../components/Motion";
+import { EASE_EDITORIAL } from "../components/motionTokens";
 
 const ALLOWED_EXT = [".pdf", ".docx", ".txt"];
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -100,7 +103,7 @@ export default function UploadScreen() {
   const busy = step > 0 && step < 4 && !feedback?.tone;
 
   return (
-    <div className="narrow-page">
+    <PageReveal className="narrow-page">
       <div className="page-header">
         <div>
           <h1 className="page-heading">Upload Contract</h1>
@@ -183,7 +186,12 @@ export default function UploadScreen() {
           <div className="pipeline-stepper" aria-live="polite">
             {percent > 0 && (
               <div className="risk-bar" style={{ marginBottom: 6 }}>
-                <div className="risk-bar-seg seg-low" style={{ width: `${percent}%` }} />
+                <motion.div
+                  className="risk-bar-seg seg-low"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${percent}%` }}
+                  transition={{ duration: 0.35, ease: EASE_EDITORIAL }}
+                />
               </div>
             )}
             {STEPS.slice(0, autoAnalyze ? 4 : 2).map((label, idx) => {
@@ -215,6 +223,6 @@ export default function UploadScreen() {
           </button>
         </div>
       </form>
-    </div>
+    </PageReveal>
   );
 }

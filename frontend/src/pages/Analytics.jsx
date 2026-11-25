@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { motion } from "framer-motion";
 import { analyticsApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { AlertTriangleIcon, BarChartIcon, ClockIcon, PlusIcon, RefreshIcon } from "../components/Icons";
+import { PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
+import { EASE_EDITORIAL } from "../components/motionTokens";
 
 const ACTION_LABELS = {
   register: "Sign Up", login: "Sign In", login_failed: "Failed Login", logout: "Sign Out",
   logout_all: "Global Revoke", token_refresh: "Token Refresh", token_reuse_detected: "Security Alert",
   password_changed: "Password Changed", profile_updated: "Profile Updated", session_revoked: "Session Revoked",
   upload: "Upload", extract: "Analysis", ask: "Contract Q&A", search: "Library Search",
-  compare: "Comparison", export_report: "Report Export", delete: "Deletion", feedback: "Feedback",
+  compare: "Comparison", draft_generated: "AI Draft", export_report: "Report Export", delete: "Deletion", feedback: "Feedback",
 };
 
 const fmtTime = (ts) =>
@@ -59,7 +62,7 @@ export default function Analytics() {
   const highArc = totalRisk ? (dist.high / totalRisk) * C : 0;
 
   return (
-    <div className="workspace-page">
+    <PageReveal className="workspace-page">
       <div className="page-header">
         <div>
           <h1 className="page-heading">Risk &amp; Quality Analytics</h1>
@@ -86,30 +89,30 @@ export default function Analytics() {
         </div>
       ) : (
         <>
-          <div className="kpi-grid">
-            <div className="kpi-card">
+          <StaggerContainer className="kpi-grid" stagger={0.04}>
+            <StaggerItem className="kpi-card">
               <span className="kpi-label">Average Risk Score</span>
               <span className={`kpi-value ${portfolio.avgRiskScore >= 60 ? "text-danger" : portfolio.avgRiskScore >= 28 ? "text-warn" : ""}`}>
                 {portfolio.avgRiskScore}<small className="kpi-unit">/100</small>
               </span>
               <span className="kpi-sub">Across {portfolio.analyzedContracts} analyzed docs</span>
-            </div>
-            <div className="kpi-card">
+            </StaggerItem>
+            <StaggerItem className="kpi-card">
               <span className="kpi-label">Classified Clauses</span>
               <span className="kpi-value">{portfolio.totalClauses}</span>
               <span className="kpi-sub">14-category legal taxonomy</span>
-            </div>
-            <div className="kpi-card">
+            </StaggerItem>
+            <StaggerItem className="kpi-card">
               <span className="kpi-label">Grounded Q&amp;A Queries</span>
               <span className="kpi-value">{qa.groundedCount || 0}<small className="kpi-unit">/{qa.totalQuestions || 0}</small></span>
               <span className="kpi-sub">{qa.refusalCount || 0} hallucination refusals</span>
-            </div>
-            <div className="kpi-card">
+            </StaggerItem>
+            <StaggerItem className="kpi-card">
               <span className="kpi-label">Reviewer Helpfulness</span>
               <span className="kpi-value text-accent">{qa.helpfulnessRate != null ? `${qa.helpfulnessRate}%` : "—"}</span>
               <span className="kpi-sub">{qa.feedbackUp || 0} helpful · {qa.feedbackDown || 0} flagged</span>
-            </div>
-          </div>
+            </StaggerItem>
+          </StaggerContainer>
 
           <div className="analytics-grid">
             <section className="surface-card analytics-card">
@@ -161,11 +164,16 @@ export default function Analytics() {
                         <span className="mono-caption">{cat.high}H · {cat.medium}M · {cat.low}L</span>
                       </div>
                       <div className="cat-track">
-                        <div className="cat-fill" style={{ width: `${(cat.total / maxCat) * 100}%` }}>
+                        <motion.div
+                          className="cat-fill"
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(cat.total / maxCat) * 100}%` }}
+                          transition={{ duration: 0.45, ease: EASE_EDITORIAL }}
+                        >
                           <span className="seg-high" style={{ width: `${(cat.high / cat.total) * 100}%` }} />
                           <span className="seg-medium" style={{ width: `${(cat.medium / cat.total) * 100}%` }} />
                           <span className="seg-low" style={{ width: `${(cat.low / cat.total) * 100}%` }} />
-                        </div>
+                        </motion.div>
                       </div>
                     </div>
                   ))}
@@ -218,6 +226,6 @@ export default function Analytics() {
           </div>
         </>
       )}
-    </div>
+    </PageReveal>
   );
 }

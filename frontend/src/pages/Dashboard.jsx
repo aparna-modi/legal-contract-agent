@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { contractsApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import ConfirmDialog from "../components/ConfirmDialog";
 import ContractDrawer from "../components/ContractDrawer";
 import LibrarySearchModal from "../components/LibrarySearchModal";
 import {
-  ArrowRightIcon, CompareIcon, FileTextIcon, LockIcon, MessageIcon, PlusIcon,
-  RefreshIcon, SearchIcon, ServerIcon, ShieldAlertIcon, ShieldCheckIcon,
+  ArrowRightIcon, CompareIcon, FileTextIcon, LockIcon, MessageIcon, PenToolIcon, PlusIcon,
+  RefreshIcon, SearchIcon, ServerIcon, ShieldCheckIcon,
   SparklesIcon, TrashIcon, XIcon,
 } from "../components/Icons";
+import { PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
+import { EASE_EDITORIAL } from "../components/motionTokens";
 
 const QUICK_QUERIES = [
   "Termination notice period",
@@ -17,6 +20,29 @@ const QUICK_QUERIES = [
   "Governing law and jurisdiction",
   "Payment deadlines and late fees",
   "Intellectual property ownership",
+];
+
+const EDITORIAL_PILLARS = [
+  {
+    num: "01",
+    title: "Clause, Risk & Obligation Triage",
+    body: "Classifies 14 legal categories, surfaces subtle semantic risks, flags missing protections, and extracts a structured party-by-party deadlines ledger.",
+  },
+  {
+    num: "02",
+    title: "Multi-Turn Grounded Q&A",
+    body: "Hold follow-up conversations anchored strictly to your document with clickable page citations—and explicit refusal whenever the contract is silent.",
+  },
+  {
+    num: "03",
+    title: "Redline Diffs & Firm Playbooks",
+    body: "Align contract versions with word-level redlines, evaluate against jurisdiction rule packs, and generate balanced fallback clauses on demand.",
+  },
+  {
+    num: "04",
+    title: "AI Contract Drafting Studio",
+    body: "Draft clean, section-numbered MSAs, NDAs, employment, contractor, and lease agreements tailored to your terms, then analyze in one click.",
+  },
 ];
 
 const formatDate = (d) =>
@@ -143,59 +169,110 @@ export default function Dashboard() {
 
   if (!isAuthenticated) {
     return (
-      <section className="landing-hero">
-        <div className="hero-content">
-          <span className="hero-kicker">Document-Grounded Legal Intelligence</span>
-          <h1 className="hero-title">Understand every obligation, risk, and exit clause before you sign.</h1>
-          <p className="hero-subtitle">
-            Upload employment agreements, vendor MSAs, NDAs, or leases. Legal Contract Agent extracts
-            structured clauses, flags high-risk terms and missing protections, redlines revisions side
-            by side, enforces firm playbooks, and answers questions strictly with page and section citations.
-          </p>
-          <div className="hero-actions">
-            <Link to="/register" className="btn btn-primary btn-lg">Create free workspace <ArrowRightIcon size={16} /></Link>
-            <Link to="/login" className="btn btn-secondary btn-lg">Sign in</Link>
+      <PageReveal className="landing-hero">
+        <section className="hero-split">
+          <div className="hero-content">
+            <span className="hero-kicker">Document-Grounded Legal Intelligence</span>
+            <h1 className="hero-title">Understand every obligation, risk, and exit clause before you sign.</h1>
+            <p className="hero-subtitle">
+              Upload employment agreements, vendor MSAs, NDAs, or leases—or draft clean commercial agreements from scratch.
+              Inspect structured clauses, obligations ledgers, word-level redlines, firm playbook checks, and page-cited Q&amp;A in one editorial workspace.
+            </p>
+            <div className="hero-actions">
+              <Link to="/register" className="btn btn-primary btn-lg">Create free workspace <ArrowRightIcon size={16} /></Link>
+              <Link to="/login" className="btn btn-secondary btn-lg">Sign in</Link>
+            </div>
+            <p className="hero-meta-note">
+              Supports PDF (with automatic OCR for scans), DOCX, and TXT · Informational review only, not legal advice.
+            </p>
           </div>
-        </div>
 
-        <div className="hero-pillars">
-          <div className="pillar-card">
-            <ShieldAlertIcon size={18} />
-            <h3>Clause, Risk &amp; Playbook Triage</h3>
-            <p>Classifies 14 legal categories, evaluates contracts against your firm playbook, and drafts balanced fallback redlines.</p>
+          <div className="hero-preview-wrap" aria-hidden="true">
+            <div className="hero-preview-backsheet" />
+            <motion.div
+              className="hero-preview-sheet"
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45, delay: 0.08, ease: EASE_EDITORIAL }}
+            >
+              <div className="preview-sheet-top">
+                <div>
+                  <div className="preview-clause-label">Vendor Revision · PDF · 14 Pages</div>
+                  <div className="preview-doc-title">Master Services Agreement</div>
+                </div>
+                <span className="risk-pill risk-high">HIGH · 74/100</span>
+              </div>
+
+              <div className="preview-clause-block">
+                <span className="preview-clause-label">Section 7.2 · Limitation of Liability (Page 6)</span>
+                <p className="preview-clause-text">
+                  Notwithstanding any other provision herein,{" "}
+                  <mark className="preview-highlight-risk">
+                    Customer&apos;s indemnification obligations and liability for indirect claims shall remain uncapped
+                  </mark>{" "}
+                  while Vendor&apos;s aggregate liability is limited to one month&apos;s fees.
+                </p>
+              </div>
+
+              <div className="preview-callout">
+                <div className="preview-callout-head">
+                  <span>Fallback Redline Suggested</span>
+                  <span className="mono-caption">Playbook Rule #3</span>
+                </div>
+                <p>
+                  Cap mutual aggregate liability at fees paid in the preceding 12 months and exclude consequential damages symmetrically for both parties.
+                </p>
+              </div>
+
+              <div className="preview-sheet-foot">
+                <div className="preview-meter-wrap">
+                  <div className="section-head-row">
+                    <span className="mono-caption">Clause Risk Profile</span>
+                    <span className="mono-caption">3H · 4M · 11L</span>
+                  </div>
+                  <div className="risk-bar">
+                    <div className="risk-bar-seg seg-high" style={{ width: "20%" }} />
+                    <div className="risk-bar-seg seg-medium" style={{ width: "26%" }} />
+                    <div className="risk-bar-seg seg-low" style={{ width: "54%" }} />
+                  </div>
+                </div>
+                <span className="citation-tag">Page 6, §7.2</span>
+              </div>
+            </motion.div>
           </div>
-          <div className="pillar-card">
-            <MessageIcon size={18} />
-            <h3>Citation-Backed Q&amp;A</h3>
-            <p>Answers cite exact pages with click-to-highlight source viewing—and explicitly refuse when a contract is silent.</p>
-          </div>
-          <div className="pillar-card">
-            <CompareIcon size={18} />
-            <h3>Redline Contract Comparison</h3>
-            <p>Semantically aligns two versions with inline word-level diffs to highlight added, removed, and modified terms.</p>
-          </div>
-        </div>
+        </section>
+
+        <StaggerContainer className="editorial-pillars" stagger={0.05}>
+          {EDITORIAL_PILLARS.map((item) => (
+            <StaggerItem key={item.num} className="editorial-pillar">
+              <span className="pillar-num">{item.num}</span>
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+            </StaggerItem>
+          ))}
+        </StaggerContainer>
 
         <div className="trust-strip-card">
           <span className="trust-item"><LockIcon size={15} /> Rotating HttpOnly refresh tokens &amp; RBAC</span>
           <span className="trust-item"><ShieldCheckIcon size={15} /> Multi-tenant MongoDB &amp; vector isolation</span>
-          <span className="trust-item"><ServerIcon size={15} /> Load-balanced API &amp; circuit-breaker AI pool</span>
+          <span className="trust-item"><ServerIcon size={15} /> Prompt-injection guards &amp; circuit-breaker AI pool</span>
         </div>
-      </section>
+      </PageReveal>
     );
   }
 
   return (
-    <div className="workspace-page">
+    <PageReveal className="workspace-page">
       <div className="page-header">
         <div>
           <h1 className="page-heading">Contract Workspace</h1>
-          <p className="page-description">Manage your agreements, inspect risk profiles, and query clauses with verifiable citations.</p>
+          <p className="page-description">Manage agreements, inspect risk profiles and deadlines, draft new contracts, and query clauses with verifiable citations.</p>
         </div>
         <div className="page-header-actions">
           <button type="button" className="btn btn-secondary" onClick={loadWorkspace} disabled={loading}>
             <RefreshIcon size={15} /> Refresh
           </button>
+          <Link to="/draft" className="btn btn-secondary"><PenToolIcon size={15} /> Draft</Link>
           {metrics.analyzed >= 2 && (
             <Link to="/compare" className="btn btn-secondary"><CompareIcon size={15} /> Compare</Link>
           )}
@@ -203,12 +280,12 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="kpi-grid">
-        <div className="kpi-card"><span className="kpi-label">Total Contracts</span><span className="kpi-value">{metrics.total}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Analyzed</span><span className="kpi-value">{metrics.analyzed}</span></div>
-        <div className="kpi-card"><span className="kpi-label">High-Risk Clauses</span><span className={`kpi-value ${metrics.highRiskClauses ? "text-danger" : ""}`}>{metrics.highRiskClauses}</span></div>
-        <div className="kpi-card"><span className="kpi-label">Indexed Passages</span><span className="kpi-value text-accent">{metrics.vectors}</span></div>
-      </div>
+      <StaggerContainer className="kpi-grid" stagger={0.04}>
+        <StaggerItem className="kpi-card"><span className="kpi-label">Total Contracts</span><span className="kpi-value">{metrics.total}</span></StaggerItem>
+        <StaggerItem className="kpi-card"><span className="kpi-label">Analyzed</span><span className="kpi-value">{metrics.analyzed}</span></StaggerItem>
+        <StaggerItem className="kpi-card"><span className="kpi-label">High-Risk Clauses</span><span className={`kpi-value ${metrics.highRiskClauses ? "text-danger" : ""}`}>{metrics.highRiskClauses}</span></StaggerItem>
+        <StaggerItem className="kpi-card"><span className="kpi-label">Indexed Passages</span><span className="kpi-value text-accent">{metrics.vectors}</span></StaggerItem>
+      </StaggerContainer>
 
       <section className="search-strip">
         <form
@@ -294,11 +371,14 @@ export default function Dashboard() {
           <div className="empty-box">
             <FileTextIcon size={28} />
             <h3>{contracts.length ? "No contracts match this filter" : "No contracts in your workspace yet"}</h3>
-            <p>{contracts.length ? "Reset filters to view all uploaded contracts." : "Upload a PDF, DOCX, or TXT contract to extract clauses and run grounded Q&A."}</p>
+            <p>{contracts.length ? "Reset filters to view all uploaded contracts." : "Upload a PDF, DOCX, or TXT contract — or draft one from a template — to extract clauses and run grounded Q&A."}</p>
             {contracts.length ? (
               <button type="button" className="btn btn-secondary" onClick={() => { setStatusFilter("all"); setRiskFilter("all"); setTableSearch(""); }}>Reset filters</button>
             ) : (
-              <Link to="/upload" className="btn btn-primary"><PlusIcon size={15} /> Upload Contract</Link>
+              <div className="hero-actions">
+                <Link to="/upload" className="btn btn-primary"><PlusIcon size={15} /> Upload Contract</Link>
+                <Link to="/draft" className="btn btn-secondary"><PenToolIcon size={15} /> Draft New Contract</Link>
+              </div>
             )}
           </div>
         ) : (
@@ -378,23 +458,27 @@ export default function Dashboard() {
         )}
       </section>
 
-      {activeContract && (
-        <ContractDrawer
-          key={`${activeContract._id}-${drawerTab}`}
-          contract={activeContract}
-          initialTab={drawerTab}
-          token={token}
-          onClose={() => setActiveContract(null)}
-          onContractUpdated={(updatedDoc) => {
-            setActiveContract(updatedDoc);
-            setContracts((prev) => prev.map((c) => (c._id === updatedDoc._id ? updatedDoc : c)));
-            contractsApi.vectorStats(token).then(setVectorStats).catch(() => {});
-          }}
-        />
-      )}
-      {searchModal.open && (
-        <LibrarySearchModal key={searchModal.query} initialQuery={searchModal.query} token={token} onClose={() => setSearchModal({ open: false, query: "" })} />
-      )}
+      <AnimatePresence>
+        {activeContract && (
+          <ContractDrawer
+            key={`${activeContract._id}-${drawerTab}`}
+            contract={activeContract}
+            initialTab={drawerTab}
+            token={token}
+            onClose={() => setActiveContract(null)}
+            onContractUpdated={(updatedDoc) => {
+              setActiveContract(updatedDoc);
+              setContracts((prev) => prev.map((c) => (c._id === updatedDoc._id ? updatedDoc : c)));
+              contractsApi.vectorStats(token).then(setVectorStats).catch(() => {});
+            }}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {searchModal.open && (
+          <LibrarySearchModal key={searchModal.query} initialQuery={searchModal.query} token={token} onClose={() => setSearchModal({ open: false, query: "" })} />
+        )}
+      </AnimatePresence>
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         title="Delete contract?"
@@ -404,6 +488,6 @@ export default function Dashboard() {
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
       />
-    </div>
+    </PageReveal>
   );
 }

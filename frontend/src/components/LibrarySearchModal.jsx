@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 import { contractsApi } from "../api/client";
 import FormattedText from "./FormattedText";
 import { AlertTriangleIcon, CheckCircleIcon, SearchIcon, XIcon } from "./Icons";
+import { EASE_EDITORIAL } from "./motionTokens";
 
 export default function LibrarySearchModal({ initialQuery, token, onClose }) {
   const [query, setQuery] = useState(initialQuery || "");
@@ -59,12 +61,23 @@ export default function LibrarySearchModal({ initialQuery, token, onClose }) {
   }, [onClose]);
 
   return (
-    <div className="dialog-backdrop" onClick={onClose}>
-      <div
+    <motion.div
+      className="dialog-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+      onClick={onClose}
+    >
+      <motion.div
         className="search-modal"
         role="dialog"
         aria-modal="true"
         aria-label="Cross-contract semantic search"
+        initial={{ opacity: 0, scale: 0.97, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.97, y: 8 }}
+        transition={{ duration: 0.24, ease: EASE_EDITORIAL }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="search-modal-head">
@@ -171,7 +184,7 @@ export default function LibrarySearchModal({ initialQuery, token, onClose }) {
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }

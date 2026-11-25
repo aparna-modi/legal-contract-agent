@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { contractsApi, feedbackApi, playbookApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import FormattedText from "./FormattedText";
 import {
-  AlertTriangleIcon, CheckCircleIcon, CheckIcon, ClockIcon, CopyIcon, DownloadIcon,
+  AlertTriangleIcon, CheckCircleIcon, CheckIcon, CopyIcon, DownloadIcon,
   FileTextIcon, MessageIcon, PrinterIcon, RefreshIcon, SearchIcon, SendIcon,
   ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, ThumbsDownIcon, ThumbsUpIcon, XIcon,
 } from "./Icons";
+import { FadePanel } from "./Motion";
+import { EASE_EDITORIAL, SPRING_SNAPPY } from "./motionTokens";
 
 const SAMPLE_QUESTIONS = [
   "Who are the parties and what are their roles?",
@@ -28,6 +31,7 @@ function printReport(contract, clauses) {
   const f = contract.keyFacts || {};
   const r = contract.riskSummary || { high: 0, medium: 0, low: 0, overallLevel: "low", score: 0 };
   const missing = contract.missingClauses || [];
+  const obligations = f.obligationsAndDeadlines || [];
   const win = window.open("", "_blank", "width=920,height=780");
   if (!win) return;
 
@@ -36,6 +40,7 @@ function printReport(contract, clauses) {
   <style>body{font-family:system-ui,sans-serif;color:#111827;max-width:820px;margin:32px auto;padding:0 24px;line-height:1.55}
   h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#4b5563;border-bottom:1px solid #e5e7eb;padding-bottom:6px;margin-top:24px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px}.box{border:1px solid #e5e7eb;padding:8px 12px;border-radius:6px}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}th,td{border:1px solid #e5e7eb;padding:7px 10px;text-align:left}th{background:#f7f6f2}
   .clause{border:1px solid #e4e1d8;border-left:3px solid #0f6e65;padding:10px 14px;margin:10px 0;page-break-inside:avoid}
   .clause.high{border-left-color:#d92d20}.clause.medium{border-left-color:#d97706}.quote{white-space:pre-wrap;font-size:13px}
   .disclaimer{background:#f7f6f2;border:1px solid #e4e1d8;border-radius:6px;padding:8px 12px;font-size:12px;color:#4a5260;margin:12px 0}</style></head><body>
@@ -50,13 +55,30 @@ function printReport(contract, clauses) {
   <div class="box"><b>Payment:</b> ${esc(f.paymentTerms || "Not specified")}</div>
   <div class="box"><b>Notice:</b> ${esc(f.noticePeriod || "Not specified")}</div>
   <div class="box"><b>Governing Law:</b> ${esc(f.governingLaw || "Not specified")}</div></div>
+  ${obligations.length ? `<h2>Obligations &amp; Deadlines</h2><table><thead><tr><th>Party</th><th>Obligation</th><th>Deadline</th><th>Ref</th></tr></thead><tbody>${obligations.map((ob) => `<tr><td>${esc(ob.party)}</td><td>${esc(ob.obligation)}</td><td>${esc(ob.deadline)}</td><td>${esc(ob.sourceRef || "—")}</td></tr>`).join("")}</tbody></table>` : ""}
   ${missing.length ? `<h2>Missing Protections</h2><ul>${missing.map((m) => `<li><b>${esc(m.clauseType)}</b> (${esc((m.severity || "medium").toUpperCase())}): ${esc(m.reason)}</li>`).join("")}</ul>` : ""}
   <h2>Clauses (${clauses.length})</h2>
-  ${clauses.map((c) => `<div class="clause ${esc(c.riskLevel || "low")}"><b>${esc(c.clauseType)} — Page ${c.pageNumber || 1}, ${esc(c.sectionHeading || "General")} (${esc((c.riskLevel || "low").toUpperCase())})</b>${c.plainEnglish ? `<p style="font-size:13px;margin:6px 0"><b>Explanation:</b> ${esc(c.plainEnglish)}</p>` : ""}${c.indianLawRef ? `<p style="font-size:12px;color:#4338ca;margin:4px 0"><b>Indian Law:</b> ${esc(c.indianLawRef)}</p>` : ""}${c.riskReason ? `<p style="font-size:12.5px;color:#4b5563">${esc(c.riskReason)}</p>` : ""}<p class="quote">${esc(c.text)}</p></div>`).join("")}
+  ${clauses.map((c) => `<div class="clause ${esc(c.riskLevel || "low")}"><b>${esc(c.clauseType)} — Page ${c.pageNumber || 1}, ${esc(c.sectionHeading || "General")} (${esc((c.riskLevel || "low").toUpperCase())})</b>${c.plainEnglish ? `<p style="font-size:13px;margin:6px 0"><b>Explanation:</b> ${esc(c.plainEnglish)}</p>` : ""}${c.indianLawRef ? `<p style="font-size:12px;color:#0f6e65;margin:4px 0"><b>Indian Law:</b> ${esc(c.indianLawRef)}</p>` : ""}${c.riskReason ? `<p style="font-size:12.5px;color:#4b5563">${esc(c.riskReason)}</p>` : ""}<p class="quote">${esc(c.text)}</p></div>`).join("")}
   </body></html>`);
   win.document.close();
   win.focus();
   setTimeout(() => win.print(), 250);
+}
+
+function historyItemToTurn(item) {
+  return {
+    id: item._id,
+    qaId: item._id,
+    query: item.query,
+    answer: item.answer || "",
+    citations: item.citations || [],
+    indian_law_refs: item.indianLawRefs || [],
+    confidence: item.confidence || "NONE",
+    insufficient_information: Boolean(item.insufficientInformation),
+    latencyMs: item.latencyMs || 0,
+    results: [],
+    createdAt: item.createdAt,
+  };
 }
 
 export default function ContractDrawer({
@@ -95,12 +117,14 @@ export default function ContractDrawer({
   const [pdfUrl, setPdfUrl] = useState(null);
   const [pdfError, setPdfError] = useState(null);
   const pageRefs = useRef({});
+  const chatEndRef = useRef(null);
+  const turnSeqRef = useRef(0);
 
   const [qaQuery, setQaQuery] = useState("");
   const [qaLoading, setQaLoading] = useState(false);
+  const [pendingQuery, setPendingQuery] = useState("");
   const [qaError, setQaError] = useState(null);
-  const [qaRes, setQaRes] = useState(null);
-  const [qaHistory, setQaHistory] = useState([]);
+  const [chatTurns, setChatTurns] = useState([]);
   const [feedbackMap, setFeedbackMap] = useState({});
   const [feedbackBusy, setFeedbackBusy] = useState({});
   const [exporting, setExporting] = useState(false);
@@ -120,7 +144,8 @@ export default function ContractDrawer({
         if (cancelled) return;
         setClauses(cData.clauses || []);
         const hist = hData.history || [];
-        setQaHistory(hist);
+        // Show saved conversation oldest-to-newest like a real counsel chat thread.
+        setChatTurns(hist.slice(0, 12).reverse().map(historyItemToTurn));
         const map = {};
         hist.forEach((h) => { if (h.feedback?.rating) map[h._id] = h.feedback.rating; });
         setFeedbackMap(map);
@@ -130,6 +155,12 @@ export default function ContractDrawer({
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [contractId, token]);
+
+  useEffect(() => {
+    if (tab === "qa" && (chatTurns.length > 0 || qaLoading)) {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [tab, chatTurns.length, qaLoading]);
 
   useEffect(() => {
     if (tab !== "document" || !isPdf || !contractId || !token || pdfUrl || pdfError) return undefined;
@@ -202,6 +233,9 @@ export default function ContractDrawer({
 
   const totalPages = Math.max(1, contract.pageCount || clausesByPage.length || 1);
   const facts = contract.keyFacts || {};
+  const obligationsAndDeadlines = Array.isArray(facts.obligationsAndDeadlines)
+    ? facts.obligationsAndDeadlines
+    : [];
   const missing = contract.missingClauses || [];
   const totalRisk = Math.max(1, riskCounts.high + riskCounts.medium + riskCounts.low);
   const overall = contract.riskSummary?.overallLevel || (riskCounts.high ? "high" : riskCounts.medium ? "medium" : "low");
@@ -222,7 +256,7 @@ export default function ContractDrawer({
     setTimeout(() => {
       const el = pageRefs.current[targetPage];
       if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 80);
+    }, 120);
   };
 
   const copyText = async (id, text) => {
@@ -295,56 +329,41 @@ export default function ContractDrawer({
 
   const askQuestion = async (questionText) => {
     const q = (questionText ?? qaQuery).trim();
-    if (!q) return;
+    if (!q || qaLoading) return;
     setQaQuery("");
+    setPendingQuery(q);
     setQaLoading(true);
     setQaError(null);
 
-    const recentTurns = qaHistory
-      .filter((h) => !h.insufficientInformation && h.answer)
-      .slice(0, 3)
-      .reverse()
-      .map((h) => ({ query: h.query, answer: h.answer }));
+    const recentTurns = chatTurns
+      .filter((t) => !t.insufficient_information && t.answer)
+      .slice(-6)
+      .map((t) => ({ query: t.query, answer: t.answer }));
 
     try {
       const data = await contractsApi.ask(token, contract._id, q, recentTurns);
-      setQaRes({ ...data, query: q });
-      if (data.qaId) {
-        setQaHistory((prev) => [
-          {
-            _id: data.qaId,
-            query: q,
-            answer: data.answer || "",
-            citations: data.citations || [],
-            indianLawRefs: data.indian_law_refs || [],
-            confidence: data.confidence || "NONE",
-            insufficientInformation: Boolean(data.insufficient_information),
-            latencyMs: data.latencyMs || 0,
-            createdAt: new Date().toISOString(),
-          },
-          ...prev.filter((i) => i._id !== data.qaId),
-        ]);
-      }
+      turnSeqRef.current += 1;
+      const newTurn = {
+        id: data.qaId || `live-${turnSeqRef.current}`,
+        qaId: data.qaId || null,
+        query: q,
+        answer: data.answer || data.message || "",
+        message: data.message || "",
+        citations: data.citations || [],
+        indian_law_refs: data.indian_law_refs || [],
+        confidence: data.confidence || "NONE",
+        insufficient_information: Boolean(data.insufficient_information),
+        latencyMs: data.latencyMs || 0,
+        results: data.results || [],
+        createdAt: new Date().toISOString(),
+      };
+      setChatTurns((prev) => [...prev, newTurn]);
     } catch (err) {
       setQaError(err.message);
     } finally {
+      setPendingQuery("");
       setQaLoading(false);
     }
-  };
-
-  const openSavedAnswer = (item) => {
-    setQaError(null);
-    setQaRes({
-      qaId: item._id,
-      query: item.query,
-      answer: item.answer,
-      citations: item.citations || [],
-      indian_law_refs: item.indianLawRefs || [],
-      confidence: item.confidence || "NONE",
-      insufficient_information: Boolean(item.insufficientInformation),
-      latencyMs: item.latencyMs || 0,
-      results: [],
-    });
   };
 
   const rateAnswer = async (qaId, rating) => {
@@ -383,8 +402,25 @@ export default function ContractDrawer({
     : clausesByPage.filter(([p]) => p === docPage);
 
   return (
-    <div className="drawer-backdrop" onClick={onClose}>
-      <aside className="drawer-panel" role="dialog" aria-modal="true" aria-label={`Inspect ${contract.title}`} onClick={(e) => e.stopPropagation()}>
+    <motion.div
+      className="drawer-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      onClick={onClose}
+    >
+      <motion.aside
+        className="drawer-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Inspect ${contract.title}`}
+        initial={{ x: 48, opacity: 0.6 }}
+        animate={{ x: 0, opacity: 1 }}
+        exit={{ x: 48, opacity: 0 }}
+        transition={{ duration: 0.28, ease: EASE_EDITORIAL }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="drawer-header">
           <div className="drawer-title-group">
             <div className="drawer-meta-line">
@@ -436,7 +472,7 @@ export default function ContractDrawer({
             { id: "overview", label: "Overview", icon: <FileTextIcon size={15} /> },
             { id: "clauses", label: "Clauses & Risks", icon: <ShieldAlertIcon size={15} />, count: clauses.length },
             { id: "document", label: "Document", icon: <FileTextIcon size={15} /> },
-            { id: "qa", label: "Ask Contract", icon: <MessageIcon size={15} />, count: qaHistory.length || null },
+            { id: "qa", label: "Ask Contract", icon: <MessageIcon size={15} />, count: chatTurns.length || null },
           ].map((t) => (
             <button
               key={t.id}
@@ -448,6 +484,13 @@ export default function ContractDrawer({
             >
               {t.icon} {t.label}
               {t.count !== undefined && t.count !== null && <span className="tab-count">{t.count}</span>}
+              {tab === t.id && (
+                <motion.span
+                  layoutId="drawer-tab-underline"
+                  className="drawer-tab-underline"
+                  transition={SPRING_SNAPPY}
+                />
+              )}
             </button>
           ))}
         </div>
@@ -455,456 +498,500 @@ export default function ContractDrawer({
         <div className="drawer-body">
           {error && <div className="alert alert-error" style={{ marginBottom: 14 }}>{error}</div>}
 
-          {tab === "overview" && (
-            <div className="drawer-stack">
-              <section className="panel-section">
-                <div className="section-head-row">
-                  <span className="section-eyebrow">Executive Summary</span>
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={checkPlaybook} disabled={playbookBusy}>
-                    <ShieldCheckIcon size={14} /> {playbookBusy ? "Checking..." : "Playbook Check"}
-                  </button>
-                </div>
-                <p className="summary-prose">{contract.summary || "Click Re-analyze to generate an executive summary."}</p>
-                {playbookEval && (
-                  <div className="playbook-mini-card">
-                    <div className="section-head-row">
-                      <strong>{playbookEval.playbookName}</strong>
-                      <span className={`risk-pill ${playbookEval.compliance_score >= 80 ? "risk-low" : playbookEval.compliance_score >= 50 ? "risk-medium" : "risk-high"}`}>
-                        {playbookEval.compliance_score}% COMPLIANT
-                      </span>
-                    </div>
-                    <span className="mono-caption">
-                      {playbookEval.summary?.passed} passed · {playbookEval.summary?.warned} warnings · {playbookEval.summary?.failed} failed
-                    </span>
+          <AnimatePresence mode="wait">
+            {tab === "overview" && (
+              <FadePanel panelKey="overview" className="drawer-stack">
+                <section className="panel-section">
+                  <div className="section-head-row">
+                    <span className="section-eyebrow">Executive Summary</span>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={checkPlaybook} disabled={playbookBusy}>
+                      <ShieldCheckIcon size={14} /> {playbookBusy ? "Checking..." : "Playbook Check"}
+                    </button>
                   </div>
-                )}
-              </section>
+                  <p className="summary-prose">{contract.summary || "Click Re-analyze to generate an executive summary."}</p>
+                  {playbookEval && (
+                    <div className="playbook-mini-card">
+                      <div className="section-head-row">
+                        <strong>{playbookEval.playbookName}</strong>
+                        <span className={`risk-pill ${playbookEval.compliance_score >= 80 ? "risk-low" : playbookEval.compliance_score >= 50 ? "risk-medium" : "risk-high"}`}>
+                          {playbookEval.compliance_score}% COMPLIANT
+                        </span>
+                      </div>
+                      <span className="mono-caption">
+                        {playbookEval.summary?.passed} passed · {playbookEval.summary?.warned} warnings · {playbookEval.summary?.failed} failed
+                      </span>
+                      {(playbookEval.results || []).filter((r) => r.status !== "pass" && r.remediation).slice(0, 3).map((r) => (
+                        <div key={r.ruleId} className="remediation-note">
+                          <strong>{r.name}:</strong> {r.remediation}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
 
-              <section className="panel-section">
-                <div className="section-head-row">
-                  <span className="section-eyebrow">Risk Distribution</span>
-                  <div className="risk-jump-pills">
-                    {["high", "medium", "low"].map((lvl) => (
-                      <button
-                        key={lvl}
-                        type="button"
-                        className={`risk-pill risk-${lvl} clickable-pill`}
-                        onClick={() => { setRiskFilter(lvl); setTab("clauses"); }}
-                      >
-                        {riskCounts[lvl]} {lvl[0].toUpperCase() + lvl.slice(1)}
+                <section className="panel-section">
+                  <div className="section-head-row">
+                    <span className="section-eyebrow">Risk Distribution</span>
+                    <div className="risk-jump-pills">
+                      {["high", "medium", "low"].map((lvl) => (
+                        <button
+                          key={lvl}
+                          type="button"
+                          className={`risk-pill risk-${lvl} clickable-pill`}
+                          onClick={() => { setRiskFilter(lvl); setTab("clauses"); }}
+                        >
+                          {riskCounts[lvl]} {lvl[0].toUpperCase() + lvl.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="risk-bar" role="img" aria-label="Clause risk breakdown">
+                    <div className="risk-bar-seg seg-high" style={{ width: `${(riskCounts.high / totalRisk) * 100}%` }} />
+                    <div className="risk-bar-seg seg-medium" style={{ width: `${(riskCounts.medium / totalRisk) * 100}%` }} />
+                    <div className="risk-bar-seg seg-low" style={{ width: `${(riskCounts.low / totalRisk) * 100}%` }} />
+                  </div>
+                </section>
+
+                <section className="panel-section">
+                  <div className="section-eyebrow">Extracted Key Facts</div>
+                  <dl className="facts-grid">
+                    {factRows.map(([label, val]) => (
+                      <div key={label} className="fact-item"><dt>{label}</dt><dd>{val}</dd></div>
+                    ))}
+                  </dl>
+                </section>
+
+                {obligationsAndDeadlines.length > 0 ? (
+                  <section className="panel-section">
+                    <div className="section-head-row">
+                      <span className="section-eyebrow">Obligations &amp; Deadlines</span>
+                      <span className="mono-caption">{obligationsAndDeadlines.length} tracked</span>
+                    </div>
+                    <div className="obligations-table-wrap">
+                      <table className="obligations-table">
+                        <thead>
+                          <tr>
+                            <th>Party</th>
+                            <th>Obligation</th>
+                            <th>Deadline</th>
+                            <th>Ref</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {obligationsAndDeadlines.map((ob, idx) => (
+                            <tr key={idx}>
+                              <td className="obligation-party">{ob.party || "Party"}</td>
+                              <td>{ob.obligation}</td>
+                              <td className="obligation-deadline">{ob.deadline || "Ongoing"}</td>
+                              <td className="mono-caption">{ob.sourceRef || "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ) : (
+                  Array.isArray(facts.keyObligations) && facts.keyObligations.length > 0 && (
+                    <section className="panel-section">
+                      <div className="section-eyebrow">Primary Obligations</div>
+                      <ul className="clean-list">
+                        {facts.keyObligations.map((ob, i) => <li key={i}>{ob}</li>)}
+                      </ul>
+                    </section>
+                  )
+                )}
+
+                {missing.length > 0 && (
+                  <section className="panel-section">
+                    <div className="section-head-row">
+                      <span className="section-eyebrow">Missing Standard Protections</span>
+                      <span className="mono-caption">{missing.length} flagged</span>
+                    </div>
+                    <div className="missing-list">
+                      {missing.map((m, i) => (
+                        <div key={i} className="missing-item">
+                          <div className="missing-item-head">
+                            <span className="missing-item-title"><AlertTriangleIcon size={14} /> {m.clauseType}</span>
+                            <span className={`risk-pill risk-${m.severity || "medium"}`}>{(m.severity || "medium").toUpperCase()}</span>
+                          </div>
+                          <p className="missing-item-reason">{m.reason}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                <p className="legal-disclaimer">AI-assisted first-pass review for informational purposes only — not legal advice. Consult a qualified attorney before signing.</p>
+              </FadePanel>
+            )}
+
+            {tab === "clauses" && (
+              <FadePanel panelKey="clauses" className="drawer-stack">
+                <div className="clause-toolbar">
+                  <div className="segmented-control">
+                    {[["all", `All (${clauses.length})`], ["high", `High (${riskCounts.high})`], ["medium", `Med (${riskCounts.medium})`], ["low", `Low (${riskCounts.low})`]].map(([k, label]) => (
+                      <button key={k} type="button" className={`seg-btn ${riskFilter === k ? "active" : ""}`} onClick={() => setRiskFilter(k)}>
+                        {label}
                       </button>
                     ))}
                   </div>
-                </div>
-                <div className="risk-bar" role="img" aria-label="Clause risk breakdown">
-                  <div className="risk-bar-seg seg-high" style={{ width: `${(riskCounts.high / totalRisk) * 100}%` }} />
-                  <div className="risk-bar-seg seg-medium" style={{ width: `${(riskCounts.medium / totalRisk) * 100}%` }} />
-                  <div className="risk-bar-seg seg-low" style={{ width: `${(riskCounts.low / totalRisk) * 100}%` }} />
-                </div>
-              </section>
-
-              <section className="panel-section">
-                <div className="section-eyebrow">Extracted Key Facts</div>
-                <dl className="facts-grid">
-                  {factRows.map(([label, val]) => (
-                    <div key={label} className="fact-item"><dt>{label}</dt><dd>{val}</dd></div>
-                  ))}
-                </dl>
-              </section>
-
-              {Array.isArray(facts.keyObligations) && facts.keyObligations.length > 0 && (
-                <section className="panel-section">
-                  <div className="section-eyebrow">Primary Obligations</div>
-                  <ul className="clean-list">
-                    {facts.keyObligations.map((ob, i) => <li key={i}>{ob}</li>)}
-                  </ul>
-                </section>
-              )}
-
-              {missing.length > 0 && (
-                <section className="panel-section">
-                  <div className="section-head-row">
-                    <span className="section-eyebrow">Missing Standard Protections</span>
-                    <span className="mono-caption">{missing.length} flagged</span>
+                  <select className="select-compact" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} aria-label="Filter by category">
+                    <option value="all">All Categories</option>
+                    {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <div className="inline-search">
+                    <SearchIcon size={14} />
+                    <input type="text" value={clauseSearch} onChange={(e) => setClauseSearch(e.target.value)} placeholder="Filter clauses..." />
                   </div>
-                  <div className="missing-list">
-                    {missing.map((m, i) => (
-                      <div key={i} className="missing-item">
-                        <div className="missing-item-head">
-                          <span className="missing-item-title"><AlertTriangleIcon size={14} /> {m.clauseType}</span>
-                          <span className={`risk-pill risk-${m.severity || "medium"}`}>{(m.severity || "medium").toUpperCase()}</span>
-                        </div>
-                        <p className="missing-item-reason">{m.reason}</p>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              <p className="legal-disclaimer">AI-assisted first-pass review for informational purposes only — not legal advice. Consult a qualified attorney before signing.</p>
-            </div>
-          )}
-
-          {tab === "clauses" && (
-            <div className="drawer-stack">
-              <div className="clause-toolbar">
-                <div className="segmented-control">
-                  {[["all", `All (${clauses.length})`], ["high", `High (${riskCounts.high})`], ["medium", `Med (${riskCounts.medium})`], ["low", `Low (${riskCounts.low})`]].map(([k, label]) => (
-                    <button key={k} type="button" className={`seg-btn ${riskFilter === k ? "active" : ""}`} onClick={() => setRiskFilter(k)}>
-                      {label}
-                    </button>
-                  ))}
                 </div>
-                <select className="select-compact" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} aria-label="Filter by category">
-                  <option value="all">All Categories</option>
-                  {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <div className="inline-search">
-                  <SearchIcon size={14} />
-                  <input type="text" value={clauseSearch} onChange={(e) => setClauseSearch(e.target.value)} placeholder="Filter clauses..." />
-                </div>
-              </div>
 
-              {loading ? (
-                <div className="state-box"><div className="spinner" /><p>Loading clauses...</p></div>
-              ) : !filteredClauses.length ? (
-                <div className="state-box"><p>No clauses match your filter.</p></div>
-              ) : (
-                <div className="clause-list">
-                  {filteredClauses.map((clause, i) => {
-                    const lvl = (clause.riskLevel || "low").toLowerCase();
-                    const rl = redlines[clause._id];
-                    return (
-                      <article key={clause._id || i} className={`clause-item border-risk-${lvl}`}>
-                        <div className="clause-item-head">
-                          <div className="clause-title-wrap">
-                            <span className="clause-category">{clause.clauseType}</span>
-                            <button type="button" className="clause-location-link" onClick={() => openDocumentAt(clause.pageNumber || 1, clause.text)}>
-                              Page {clause.pageNumber || 1} · {clause.sectionHeading || "General"} →
-                            </button>
-                          </div>
-                          <div className="clause-head-right">
-                            {(lvl === "high" || lvl === "medium") && (
-                              <button type="button" className="btn btn-secondary btn-sm" onClick={() => suggestRedline(clause)} disabled={Boolean(redlineBusy[clause._id])}>
-                                <SparklesIcon size={13} /> {redlineBusy[clause._id] ? "Drafting..." : "Suggest Redline"}
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              onClick={() => copyText(clause._id, `[${clause.clauseType} — Page ${clause.pageNumber || 1}]\n${clause.text}`)}
-                              aria-label="Copy clause"
-                            >
-                              {copiedId === clause._id ? <CheckIcon size={14} className="text-accent" /> : <CopyIcon size={14} />}
-                            </button>
-                            <span className={`risk-pill risk-${lvl}`}>{lvl.toUpperCase()}</span>
-                          </div>
-                        </div>
-
-                        {clause.plainEnglish && (
-                          <div className="clause-explanation-box">
-                            <span className="section-eyebrow text-accent">What this clause means</span>
-                            <p className="clause-explanation-text">{clause.plainEnglish}</p>
-                          </div>
-                        )}
-
-                        {clause.indianLawRef && (
-                          <div className="law-ref-row">
-                            <span className="law-ref-badge">Indian Law</span>
-                            <span className="law-ref-text">{clause.indianLawRef}</span>
-                          </div>
-                        )}
-
-                        {clause.riskReason && <p className="clause-rationale"><strong>Risk note:</strong> {clause.riskReason}</p>}
-
-                        <details className="clause-source-details">
-                          <summary>Original contract wording (Page {clause.pageNumber || 1} · {clause.sectionHeading || "General"})</summary>
-                          <p className="clause-quote">{clause.text}</p>
-                        </details>
-
-                        {rl && (
-                          <div className="redline-suggestion-box">
-                            <div className="section-head-row">
-                              <span className="section-eyebrow text-accent"><SparklesIcon size={13} /> Fallback Redline</span>
-                              <button type="button" className="btn btn-ghost btn-sm" onClick={() => copyText(`rl-${clause._id}`, rl.suggested_text)}>
-                                {copiedId === `rl-${clause._id}` ? <><CheckIcon size={13} /> Copied</> : <><CopyIcon size={13} /> Copy</>}
+                {loading ? (
+                  <div className="state-box"><div className="spinner" /><p>Loading clauses...</p></div>
+                ) : !filteredClauses.length ? (
+                  <div className="state-box"><p>No clauses match your filter.</p></div>
+                ) : (
+                  <div className="clause-list">
+                    {filteredClauses.map((clause, i) => {
+                      const lvl = (clause.riskLevel || "low").toLowerCase();
+                      const rl = redlines[clause._id];
+                      return (
+                        <article key={clause._id || i} className={`clause-item border-risk-${lvl}`}>
+                          <div className="clause-item-head">
+                            <div className="clause-title-wrap">
+                              <span className="clause-category">{clause.clauseType}</span>
+                              <button type="button" className="clause-location-link" onClick={() => openDocumentAt(clause.pageNumber || 1, clause.text)}>
+                                Page {clause.pageNumber || 1} · {clause.sectionHeading || "General"} →
                               </button>
                             </div>
-                            <p className="redline-suggested-text">{rl.suggested_text}</p>
-                            {rl.rationale && <p className="muted-caption">{rl.rationale}</p>}
-                            {rl.talking_points?.length > 0 && (
-                              <ul className="clean-list">{rl.talking_points.map((pt, j) => <li key={j}>{pt}</li>)}</ul>
-                            )}
+                            <div className="clause-head-right">
+                              {(lvl === "high" || lvl === "medium") && (
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => suggestRedline(clause)} disabled={Boolean(redlineBusy[clause._id])}>
+                                  <SparklesIcon size={13} /> {redlineBusy[clause._id] ? "Drafting..." : "Suggest Redline"}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                onClick={() => copyText(clause._id, `[${clause.clauseType} — Page ${clause.pageNumber || 1}]\n${clause.text}`)}
+                                aria-label="Copy clause"
+                              >
+                                {copiedId === clause._id ? <CheckIcon size={14} className="text-accent" /> : <CopyIcon size={14} />}
+                              </button>
+                              <span className={`risk-pill risk-${lvl}`}>{lvl.toUpperCase()}</span>
+                            </div>
                           </div>
-                        )}
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-              <p className="legal-disclaimer">Clause risk labels, plain-English explanations, and fallback redlines are AI-assisted suggestions and do not constitute legal advice.</p>
-            </div>
-          )}
 
-          {tab === "document" && (
-            <div className="drawer-stack">
-              <div className="section-head-row">
-                <div>
-                  <span className="section-eyebrow">Source Document Viewer</span>
-                  <p className="muted-caption">
-                    Page {docPage} of {totalPages}{highlightText ? " · Cited clause highlighted" : ""}
-                  </p>
-                </div>
-                <div className="page-jump-controls">
-                  {pdfUrl && (
-                    <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">
-                      Open PDF
-                    </a>
-                  )}
-                  <button
-                    type="button"
-                    className="seg-btn"
-                    disabled={docPage <= 1}
-                    onClick={() => jumpToPage(docPage - 1)}
-                  >
-                    Prev
-                  </button>
-                  {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => i + 1).map((p) => (
-                    <button key={p} type="button" className={`seg-btn ${docPage === p ? "active" : ""}`} onClick={() => jumpToPage(p)}>
-                      P{p}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    className="seg-btn"
-                    disabled={docPage >= totalPages}
-                    onClick={() => jumpToPage(docPage + 1)}
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
+                          {clause.plainEnglish && (
+                            <div className="clause-explanation-box">
+                              <span className="section-eyebrow text-accent">What this clause means</span>
+                              <p className="clause-explanation-text">{clause.plainEnglish}</p>
+                            </div>
+                          )}
 
-              {isPdf && (
-                <div className="pdf-viewer-frame">
-                  {pdfLoading ? (
-                    <div className="state-box"><div className="spinner" /><p>Loading PDF preview...</p></div>
-                  ) : pdfUrl ? (
-                    <iframe
-                      key={`${pdfUrl}-${docPage}`}
-                      src={`${pdfUrl}#page=${docPage}`}
-                      title={contract.title || contract.fileName}
-                      className="pdf-iframe"
-                    />
-                  ) : (
-                    <div className="state-box muted">
-                      <p>{pdfError || "Inline PDF preview unavailable; synchronized clauses shown below."}</p>
-                    </div>
-                  )}
-                </div>
-              )}
+                          {clause.indianLawRef && (
+                            <div className="law-ref-row">
+                              <span className="law-ref-badge">Indian Law</span>
+                              <span className="law-ref-text">{clause.indianLawRef}</span>
+                            </div>
+                          )}
 
-              <div className="section-head-row">
-                <span className="section-eyebrow">Synchronized Extracted Text</span>
-                <div className="segmented-control">
-                  <button type="button" className={`seg-btn ${showAllPages ? "active" : ""}`} onClick={() => setShowAllPages(true)}>
-                    All Pages
-                  </button>
-                  <button type="button" className={`seg-btn ${!showAllPages ? "active" : ""}`} onClick={() => setShowAllPages(false)}>
-                    Page {docPage} Only
-                  </button>
-                </div>
-              </div>
+                          {clause.riskReason && <p className="clause-rationale"><strong>Risk note:</strong> {clause.riskReason}</p>}
 
-              <div className="source-reader-pages">
-                {visiblePages.map(([pageNum, list]) => (
-                  <section
-                    key={pageNum}
-                    ref={(el) => { pageRefs.current[pageNum] = el; }}
-                    className="source-page-block"
-                  >
-                    <div className="source-page-header">
-                      <span>Page {pageNum}</span>
-                      <span className="mono-caption">{list.length} {list.length === 1 ? "provision" : "provisions"}</span>
-                    </div>
-                    {list.map((c, idx) => {
-                      const hit = highlightText && (c.text.includes(highlightText.slice(0, 60)) || highlightText.includes(c.text.slice(0, 60)));
-                      return (
-                        <div key={c._id || idx} className={`source-clause-row ${hit ? "highlighted-citation" : ""}`}>
-                          <div className="source-clause-meta">
-                            <span className="clause-category">{c.clauseType}</span>
-                            <span className="mono-caption">{c.sectionHeading || "General"}</span>
-                          </div>
-                          <p className="source-clause-body">{c.text}</p>
-                        </div>
+                          <details className="clause-source-details">
+                            <summary>Original contract wording (Page {clause.pageNumber || 1} · {clause.sectionHeading || "General"})</summary>
+                            <p className="clause-quote">{clause.text}</p>
+                          </details>
+
+                          {rl && (
+                            <div className="redline-suggestion-box">
+                              <div className="section-head-row">
+                                <span className="section-eyebrow text-accent"><SparklesIcon size={13} /> Fallback Redline</span>
+                                <button type="button" className="btn btn-ghost btn-sm" onClick={() => copyText(`rl-${clause._id}`, rl.suggested_text)}>
+                                  {copiedId === `rl-${clause._id}` ? <><CheckIcon size={13} /> Copied</> : <><CopyIcon size={13} /> Copy</>}
+                                </button>
+                              </div>
+                              <p className="redline-suggested-text">{rl.suggested_text}</p>
+                              {rl.rationale && <p className="muted-caption">{rl.rationale}</p>}
+                              {rl.talking_points?.length > 0 && (
+                                <ul className="clean-list">{rl.talking_points.map((pt, j) => <li key={j}>{pt}</li>)}</ul>
+                              )}
+                            </div>
+                          )}
+                        </article>
                       );
                     })}
-                  </section>
-                ))}
-              </div>
-            </div>
-          )}
+                  </div>
+                )}
+                <p className="legal-disclaimer">Clause risk labels, plain-English explanations, and fallback redlines are AI-assisted suggestions and do not constitute legal advice.</p>
+              </FadePanel>
+            )}
 
-          {tab === "qa" && (
-            <div className="drawer-stack">
-              <form className="qa-form" onSubmit={(e) => { e.preventDefault(); askQuestion(); }}>
-                <input
-                  type="text"
-                  className="text-input"
-                  value={qaQuery}
-                  onChange={(e) => setQaQuery(e.target.value)}
-                  placeholder="Ask anything about this contract — dates, amounts, clauses, risks, or obligations..."
-                  disabled={qaLoading}
-                />
-                <button type="submit" className="btn btn-primary" disabled={qaLoading || !qaQuery.trim()}>
-                  <SendIcon size={14} /> {qaLoading ? "Reviewing..." : "Ask"}
-                </button>
-              </form>
+            {tab === "document" && (
+              <FadePanel panelKey="document" className="drawer-stack">
+                <div className="section-head-row">
+                  <div>
+                    <span className="section-eyebrow">Source Document Viewer</span>
+                    <p className="muted-caption">
+                      Page {docPage} of {totalPages}{highlightText ? " · Cited clause highlighted" : ""}
+                    </p>
+                  </div>
+                  <div className="page-jump-controls">
+                    {pdfUrl && (
+                      <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">
+                        Open PDF
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      className="seg-btn"
+                      disabled={docPage <= 1}
+                      onClick={() => jumpToPage(docPage - 1)}
+                    >
+                      Prev
+                    </button>
+                    {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => i + 1).map((p) => (
+                      <button key={p} type="button" className={`seg-btn ${docPage === p ? "active" : ""}`} onClick={() => jumpToPage(p)}>
+                        P{p}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="seg-btn"
+                      disabled={docPage >= totalPages}
+                      onClick={() => jumpToPage(docPage + 1)}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
 
-              <div className="prompt-chips">
-                {SAMPLE_QUESTIONS.map((q) => (
-                  <button key={q} type="button" className="chip-btn" onClick={() => askQuestion(q)} disabled={qaLoading}>{q}</button>
-                ))}
-              </div>
-
-              {qaLoading && <div className="state-box"><div className="spinner" /><p>Reading contract sections and verifying citations...</p></div>}
-              {qaError && <div className="alert alert-error">{qaError}</div>}
-
-              {!qaLoading && qaRes && (
-                <div className="qa-result-stack">
-                  <p className="legal-disclaimer">Answers are grounded in your uploaded document for informational review only — not legal advice.</p>
-                  {qaRes.query && (
-                    <div className="qa-question-pill">
-                      <span className="section-eyebrow">Question</span>
-                      <strong>{qaRes.query}</strong>
-                    </div>
-                  )}
-
-                  {qaRes.insufficient_information ? (
-                    <div className="qa-refusal-box">
-                      <div className="qa-refusal-head"><AlertTriangleIcon size={16} /><strong>Not specified in this contract</strong></div>
-                      <FormattedText text={qaRes.answer || qaRes.message} className="qa-refusal-body" />
-                      {qaRes.message && qaRes.answer && <span className="mono-caption">{qaRes.message}</span>}
-                    </div>
-                  ) : (
-                    <div className="qa-answer-box">
-                      <div className="qa-answer-top">
-                        <span className="qa-answer-label"><CheckCircleIcon size={15} /> Grounded Answer</span>
-                        <div className="qa-answer-badges">
-                          {qaRes.latencyMs > 0 && <span className="mono-caption">{(qaRes.latencyMs / 1000).toFixed(1)}s</span>}
-                          {qaRes.confidence && qaRes.confidence !== "NONE" && (
-                            <span className={`confidence-pill conf-${qaRes.confidence.toLowerCase()}`}>{qaRes.confidence}</span>
-                          )}
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            onClick={() => copyText("qa-active", qaRes.answer)}
-                            aria-label="Copy answer"
-                          >
-                            {copiedId === "qa-active" ? <CheckIcon size={13} className="text-accent" /> : <CopyIcon size={13} />}
-                          </button>
-                        </div>
+                {isPdf && (
+                  <div className="pdf-viewer-frame">
+                    {pdfLoading ? (
+                      <div className="state-box"><div className="spinner" /><p>Loading PDF preview...</p></div>
+                    ) : pdfUrl ? (
+                      <iframe
+                        key={`${pdfUrl}-${docPage}`}
+                        src={`${pdfUrl}#page=${docPage}`}
+                        title={contract.title || contract.fileName}
+                        className="pdf-iframe"
+                      />
+                    ) : (
+                      <div className="state-box muted">
+                        <p>{pdfError || "Inline PDF preview unavailable; synchronized clauses shown below."}</p>
                       </div>
-                      <FormattedText text={qaRes.answer} />
-                      {qaRes.indian_law_refs?.length > 0 && (
-                        <div className="law-ref-stack">
-                          <span className="law-ref-badge">Applicable Indian Law</span>
-                          <div className="citation-row">
-                            {qaRes.indian_law_refs.map((law, i) => (
-                              <span key={i} className="law-ref-pill">{law}</span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {qaRes.citations?.length > 0 && (
-                        <div className="citation-row">
-                          {qaRes.citations.map((cite, i) => (
-                            <button
-                              key={i}
-                              type="button"
-                              className="citation-tag clickable-citation"
-                              onClick={() => openDocumentAt(parsePage(cite), qaRes.results?.[i]?.text || "")}
-                            >
-                              {cite}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {qaRes.qaId && (
-                        <div className="feedback-bar">
-                          <span className="feedback-prompt">Was this answer helpful?</span>
-                          <div className="feedback-btns">
-                            <button type="button" className={`feedback-btn ${feedbackMap[qaRes.qaId] === "up" ? "active-up" : ""}`} onClick={() => rateAnswer(qaRes.qaId, "up")} disabled={feedbackBusy[qaRes.qaId]}>
-                              <ThumbsUpIcon size={14} /> Helpful
-                            </button>
-                            <button type="button" className={`feedback-btn ${feedbackMap[qaRes.qaId] === "down" ? "active-down" : ""}`} onClick={() => rateAnswer(qaRes.qaId, "down")} disabled={feedbackBusy[qaRes.qaId]}>
-                              <ThumbsDownIcon size={14} /> Needs review
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                    )}
+                  </div>
+                )}
 
-                  {qaRes.results?.length > 0 && (
-                    <div className="evidence-section">
-                      <div className="section-eyebrow">Supporting Passages ({qaRes.results.length})</div>
-                      <div className="evidence-list">
-                        {qaRes.results.map((item, i) => (
-                          <div key={item.chunk_id || i} className="evidence-card">
-                            <div className="evidence-meta">
-                              <button type="button" className="clause-location-link" onClick={() => openDocumentAt(item.page_number || 1, item.text)}>
-                                {item.citation || `Page ${item.page_number}, ${item.section}`} →
-                              </button>
-                              <span className="mono-caption">{Math.round((item.score || 0) * 100)}% relevance</span>
+                <div className="section-head-row">
+                  <span className="section-eyebrow">Synchronized Extracted Text</span>
+                  <div className="segmented-control">
+                    <button type="button" className={`seg-btn ${showAllPages ? "active" : ""}`} onClick={() => setShowAllPages(true)}>
+                      All Pages
+                    </button>
+                    <button type="button" className={`seg-btn ${!showAllPages ? "active" : ""}`} onClick={() => setShowAllPages(false)}>
+                      Page {docPage} Only
+                    </button>
+                  </div>
+                </div>
+
+                <div className="source-reader-pages">
+                  {visiblePages.map(([pageNum, list]) => (
+                    <section
+                      key={pageNum}
+                      ref={(el) => { pageRefs.current[pageNum] = el; }}
+                      className="source-page-block"
+                    >
+                      <div className="source-page-header">
+                        <span>Page {pageNum}</span>
+                        <span className="mono-caption">{list.length} {list.length === 1 ? "provision" : "provisions"}</span>
+                      </div>
+                      {list.map((c, idx) => {
+                        const hit = highlightText && (c.text.includes(highlightText.slice(0, 60)) || highlightText.includes(c.text.slice(0, 60)));
+                        return (
+                          <div key={c._id || idx} className={`source-clause-row ${hit ? "highlighted-citation" : ""}`}>
+                            <div className="source-clause-meta">
+                              <span className="clause-category">{c.clauseType}</span>
+                              <span className="mono-caption">{c.sectionHeading || "General"}</span>
                             </div>
-                            <p className="evidence-text">{item.text}</p>
+                            <p className="source-clause-body">{c.text}</p>
                           </div>
+                        );
+                      })}
+                    </section>
+                  ))}
+                </div>
+              </FadePanel>
+            )}
+
+            {tab === "qa" && (
+              <FadePanel panelKey="qa" className="chat-workspace">
+                <p className="legal-disclaimer">
+                  Multi-turn Q&amp;A grounded strictly in your uploaded contract (retains up to 6 prior turns of context). Informational review only — not legal advice.
+                </p>
+
+                <div className="chat-thread">
+                  {chatTurns.length === 0 && !qaLoading ? (
+                    <div className="chat-empty-state">
+                      <h3>Ask this contract anything</h3>
+                      <p>
+                        Every answer cites exact page numbers and quotes the contract verbatim. If a detail isn&apos;t in the document, the assistant will say so explicitly instead of guessing.
+                      </p>
+                      <div className="prompt-chips">
+                        {SAMPLE_QUESTIONS.map((q) => (
+                          <button key={q} type="button" className="chip-btn" onClick={() => askQuestion(q)} disabled={qaLoading}>{q}</button>
                         ))}
                       </div>
                     </div>
-                  )}
-                </div>
-              )}
+                  ) : (
+                    chatTurns.map((turn) => (
+                      <motion.div
+                        key={turn.id}
+                        className="chat-turn"
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.24, ease: EASE_EDITORIAL }}
+                      >
+                        <div className="chat-bubble-user">{turn.query}</div>
 
-              {qaHistory.length > 0 && (
-                <section className="history-section">
-                  <span className="section-eyebrow"><ClockIcon size={13} /> Saved Q&amp;A History ({qaHistory.length})</span>
-                  <div className="history-list">
-                    {qaHistory.slice(0, 10).map((item) => (
-                      <div key={item._id} className="history-card">
-                        <div className="history-card-head">
-                          <button type="button" className="history-query-btn" onClick={() => openSavedAnswer(item)}>
-                            {item.query}
-                          </button>
-                          <div className="history-card-meta">
-                            {!item.insufficientInformation && item.confidence && item.confidence !== "NONE" && (
-                              <span className={`confidence-pill conf-${item.confidence.toLowerCase()}`}>{item.confidence}</span>
-                            )}
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              style={{ padding: "2px 7px", fontSize: 11.5 }}
-                              onClick={() => askQuestion(item.query)}
-                              disabled={qaLoading}
-                              title="Re-run this question"
-                            >
-                              Re-ask
-                            </button>
-                            <button type="button" className={`feedback-mini ${feedbackMap[item._id] === "up" ? "active-up" : ""}`} onClick={() => rateAnswer(item._id, "up")} aria-label="Helpful"><ThumbsUpIcon size={12} /></button>
-                            <button type="button" className={`feedback-mini ${feedbackMap[item._id] === "down" ? "active-down" : ""}`} onClick={() => rateAnswer(item._id, "down")} aria-label="Needs review"><ThumbsDownIcon size={12} /></button>
+                        {turn.insufficient_information ? (
+                          <div className="chat-bubble-ai is-refusal">
+                            <div className="qa-refusal-head">
+                              <AlertTriangleIcon size={16} />
+                              <strong>Not specified in this contract</strong>
+                            </div>
+                            <FormattedText text={turn.answer || turn.message} className="qa-refusal-body" />
                           </div>
-                        </div>
-                        <p className="history-answer">{item.answer || "No answer recorded."}</p>
+                        ) : (
+                          <div className="chat-bubble-ai">
+                            <div className="qa-answer-top">
+                              <span className="qa-answer-label">
+                                <CheckCircleIcon size={15} /> Grounded Answer
+                              </span>
+                              <div className="qa-answer-badges">
+                                {turn.latencyMs > 0 && <span className="mono-caption">{(turn.latencyMs / 1000).toFixed(1)}s</span>}
+                                {turn.confidence && turn.confidence !== "NONE" && (
+                                  <span className={`confidence-pill conf-${turn.confidence.toLowerCase()}`}>{turn.confidence}</span>
+                                )}
+                                <button
+                                  type="button"
+                                  className="icon-btn"
+                                  onClick={() => copyText(turn.id, turn.answer)}
+                                  aria-label="Copy answer"
+                                >
+                                  {copiedId === turn.id ? <CheckIcon size={13} className="text-accent" /> : <CopyIcon size={13} />}
+                                </button>
+                              </div>
+                            </div>
+
+                            <FormattedText text={turn.answer} />
+
+                            {turn.indian_law_refs?.length > 0 && (
+                              <div className="law-ref-stack">
+                                <span className="law-ref-badge">Applicable Indian Law</span>
+                                <div className="citation-row">
+                                  {turn.indian_law_refs.map((law, i) => (
+                                    <span key={i} className="law-ref-pill">{law}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {turn.citations?.length > 0 && (
+                              <div className="citation-row">
+                                {turn.citations.map((cite, i) => (
+                                  <button
+                                    key={i}
+                                    type="button"
+                                    className="citation-tag clickable-citation"
+                                    onClick={() => openDocumentAt(parsePage(cite), turn.results?.[i]?.text || "")}
+                                  >
+                                    {cite}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+
+                            {turn.results?.length > 0 && (
+                              <details className="evidence-details">
+                                <summary>Supporting contract passages ({turn.results.length})</summary>
+                                <div className="evidence-list">
+                                  {turn.results.map((item, i) => (
+                                    <div key={item.chunk_id || i} className="evidence-card">
+                                      <div className="evidence-meta">
+                                        <button type="button" className="clause-location-link" onClick={() => openDocumentAt(item.page_number || 1, item.text)}>
+                                          {item.citation || `Page ${item.page_number}, ${item.section}`} →
+                                        </button>
+                                        <span className="mono-caption">{Math.round((item.score || 0) * 100)}% relevance</span>
+                                      </div>
+                                      <p className="evidence-text">{item.text}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </details>
+                            )}
+
+                            {turn.qaId && (
+                              <div className="feedback-bar">
+                                <span className="feedback-prompt">Was this answer helpful?</span>
+                                <div className="feedback-btns">
+                                  <button type="button" className={`feedback-btn ${feedbackMap[turn.qaId] === "up" ? "active-up" : ""}`} onClick={() => rateAnswer(turn.qaId, "up")} disabled={feedbackBusy[turn.qaId]}>
+                                    <ThumbsUpIcon size={14} /> Helpful
+                                  </button>
+                                  <button type="button" className={`feedback-btn ${feedbackMap[turn.qaId] === "down" ? "active-down" : ""}`} onClick={() => rateAnswer(turn.qaId, "down")} disabled={feedbackBusy[turn.qaId]}>
+                                    <ThumbsDownIcon size={14} /> Needs review
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </motion.div>
+                    ))
+                  )}
+
+                  {qaLoading && (
+                    <div className="chat-turn">
+                      {pendingQuery && <div className="chat-bubble-user">{pendingQuery}</div>}
+                      <div className="chat-thinking-bubble">
+                        <span className="typing-dots" aria-hidden="true"><span /><span /><span /></span>
+                        <span>Reading contract sections and verifying citations...</span>
                       </div>
-                    ))}
-                  </div>
-                </section>
-              )}
-            </div>
-          )}
+                    </div>
+                  )}
+
+                  {qaError && <div className="alert alert-error">{qaError}</div>}
+                  <div ref={chatEndRef} />
+                </div>
+
+                <div className="chat-composer-sticky">
+                  {chatTurns.length > 0 && (
+                    <div className="prompt-chips">
+                      {SAMPLE_QUESTIONS.slice(0, 3).map((q) => (
+                        <button key={q} type="button" className="chip-btn" onClick={() => askQuestion(q)} disabled={qaLoading}>{q}</button>
+                      ))}
+                    </div>
+                  )}
+                  <form className="qa-form" onSubmit={(e) => { e.preventDefault(); askQuestion(); }}>
+                    <input
+                      type="text"
+                      className="text-input"
+                      value={qaQuery}
+                      onChange={(e) => setQaQuery(e.target.value)}
+                      placeholder="Ask a follow-up question about dates, amounts, clauses, risks, or obligations..."
+                      disabled={qaLoading}
+                    />
+                    <button type="submit" className="btn btn-primary" disabled={qaLoading || !qaQuery.trim()}>
+                      <SendIcon size={14} /> {qaLoading ? "Reviewing..." : "Send"}
+                    </button>
+                  </form>
+                </div>
+              </FadePanel>
+            )}
+          </AnimatePresence>
         </div>
-      </aside>
-    </div>
+      </motion.aside>
+    </motion.div>
   );
 }

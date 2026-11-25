@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { contractsApi, playbookApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { AlertTriangleIcon, CheckCircleIcon, PlusIcon, ShieldCheckIcon, SparklesIcon, TrashIcon } from "../components/Icons";
+import { PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
 
 const RULE_LABELS = {
   require_clause: "Require Clause Category",
@@ -99,7 +100,7 @@ export default function Playbook() {
   if (loading) return <div className="surface-card state-box"><div className="spinner" /><p>Loading legal playbook...</p></div>;
 
   return (
-    <div className="workspace-page">
+    <PageReveal className="workspace-page">
       <div className="page-header">
         <div>
           <h1 className="page-heading">Legal Playbook &amp; Compliance</h1>
@@ -115,18 +116,18 @@ export default function Playbook() {
             <span className="section-eyebrow">Jurisdiction-Specific Legal Rule Packs</span>
             <span className="mono-caption">One-click templates</span>
           </div>
-          <div className="infra-grid">
+          <StaggerContainer className="infra-grid" stagger={0.04}>
             {presets.map((p) => (
-              <div key={p.id} className="infra-stat">
+              <StaggerItem key={p.id} className="infra-stat">
                 <strong>{p.label}</strong>
                 <span className="mono-caption">{p.jurisdiction} · {p.ruleCount} rules</span>
                 <p className="muted-caption" style={{ fontSize: 12, marginTop: 4 }}>{p.description}</p>
                 <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: "auto" }} disabled={saving} onClick={() => applyPreset(p.id)}>
                   Load Pack
                 </button>
-              </div>
+              </StaggerItem>
             ))}
-          </div>
+          </StaggerContainer>
         </section>
       )}
 
@@ -168,6 +169,11 @@ export default function Playbook() {
                       <strong>{r.name}</strong>
                     </div>
                     <span className="muted-caption">{r.detail}</span>
+                    {r.status !== "pass" && r.remediation && (
+                      <div className="remediation-note">
+                        <strong>Recommended remediation:</strong> {r.remediation}
+                      </div>
+                    )}
                   </div>
                   <span className={`risk-pill ${r.status === "pass" ? "risk-low" : r.status === "warn" ? "risk-medium" : "risk-high"}`}>
                     {r.status.toUpperCase()}
@@ -257,6 +263,6 @@ export default function Playbook() {
           </div>
         </form>
       </section>
-    </div>
+    </PageReveal>
   );
 }

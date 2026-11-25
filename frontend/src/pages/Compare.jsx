@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { contractsApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { CompareIcon, PlusIcon, SwapIcon } from "../components/Icons";
+import { CompareIcon, DownloadIcon, PlusIcon, SwapIcon } from "../components/Icons";
+import { FadePanel, PageReveal } from "../components/Motion";
+import { SPRING_SNAPPY } from "../components/motionTokens";
 
 function wordDiff(textA = "", textB = "") {
   const a = String(textA).split(/(\s+)/);
@@ -36,6 +39,55 @@ function wordDiff(textA = "", textB = "") {
   while (i < m) left.push({ text: a[i++], type: "del" });
   while (j < n) right.push({ text: b[j++], type: "add" });
   return { left, right };
+}
+
+function exportComparisonMarkdown(result) {
+  if (!result) return;
+  const lines = [
+    `# Revision Comparison: ${result.contract_a} vs ${result.contract_b}`,
+    "",
+    "> **Disclaimer:** AI-assisted revision diff for informational review only — not legal advice.",
+    "",
+    "## Executive Summary",
+    result.executive_summary || "Comparison completed.",
+    "",
+  ];
+  if (result.material_changes?.length) {
+    lines.push("## Material Differences", ...result.material_changes.map((c) => `- ${c}`), "");
+  }
+  if (result.recommendation) {
+    lines.push(`**Review Takeaway:** ${result.recommendation}`, "");
+  }
+  if (result.modified?.length) {
+    lines.push(`## Modified Clauses (${result.modified.length})`, "");
+    result.modified.forEach((m, idx) => {
+      lines.push(`### ${idx + 1}. ${m.clause_type} (${Math.round((m.similarity || 0) * 100)}% match)`);
+      if (m.change_notes?.length) lines.push(`- **Notes:** ${m.change_notes.join("; ")}`);
+      lines.push(`- **${result.contract_a} (${(m.risk_a || "low").toUpperCase()}):** ${m.text_a}`);
+      lines.push(`- **${result.contract_b} (${(m.risk_b || "low").toUpperCase()}):** ${m.text_b}`, "");
+    });
+  }
+  if (result.added?.length) {
+    lines.push(`## Added in ${result.contract_b} (${result.added.length})`, "");
+    result.added.forEach((a, idx) => {
+      lines.push(`### ${idx + 1}. ${a.clause_type} (${(a.risk_level || "low").toUpperCase()})`, "", a.text, "");
+    });
+  }
+  if (result.removed?.length) {
+    lines.push(`## Removed from ${result.contract_a} (${result.removed.length})`, "");
+    result.removed.forEach((r, idx) => {
+      lines.push(`### ${idx + 1}. ${r.clause_type} (${(r.risk_level || "low").toUpperCase()})`, "", r.text, "");
+    });
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/markdown; charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `comparison_${Date.now()}.md`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 const RedlineText = ({ segments }) => (
@@ -98,13 +150,20 @@ export default function Compare() {
   };
 
   return (
-    <div className="workspace-page">
+    <PageReveal className="workspace-page">
       <div className="page-header">
         <div>
           <h1 className="page-heading">Revision Comparison</h1>
           <p className="page-description">Align clauses across two agreements with word-level redlines and risk-shift alerts.</p>
         </div>
-        <Link to="/upload" className="btn btn-secondary"><PlusIcon size={15} /> Upload Contract</Link>
+        <div className="page-header-actions">
+          {result && (
+            <button type="button" className="btn btn-secondary" onClick={() => exportComparisonMarkdown(result)}>
+              <DownloadIcon size={15} /> Export Diff (.md)
+            </button>
+          )}
+          <Link to="/upload" className="btn btn-secondary"><PlusIcon size={15} /> Upload Contract</Link>
+        </div>
       </div>
 
       {loading ? (
@@ -184,6 +243,9 @@ export default function Compare() {
                     ["unchanged", "Unchanged"],
                   ].map(([k, label]) => (
                     <button key={k} type="button" className={`diff-tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
+                      {tab === k && (
+                        <motion.span layoutId="compare-tab-bg" className="diff-tab-bg" transition={SPRING_SNAPPY} />
+                      )}
                       <span>{label}</span>
                       <span className="tab-count">{result.counts?.[k] || 0}</span>
                     </button>
@@ -197,74 +259,76 @@ export default function Compare() {
                 )}
               </div>
 
-              <div className="diff-list">
-                {tab === "modified" && (
-                  result.modified.length === 0
-                    ? <div className="surface-card state-box"><p>No modified clauses detected.</p></div>
-                    : result.modified.map((item, i) => {
-                        const diff = redline ? wordDiff(item.text_a, item.text_b) : null;
-                        return (
-                          <article key={i} className="surface-card diff-card">
+              <AnimatePresence mode="wait">
+                <FadePanel panelKey={tab} className="diff-list">
+                  {tab === "modified" && (
+                    result.modified.length === 0
+                      ? <div className="surface-card state-box"><p>No modified clauses detected.</p></div>
+                      : result.modified.map((item, i) => {
+                          const diff = redline ? wordDiff(item.text_a, item.text_b) : null;
+                          return (
+                            <article key={i} className="surface-card diff-card">
+                              <div className="diff-card-head">
+                                <span className="clause-category">{item.clause_type}</span>
+                                <span className="mono-caption">{Math.round((item.similarity || 0) * 100)}% semantic match</span>
+                              </div>
+                              {item.change_notes?.length > 0 && (
+                                <div className="diff-notes">
+                                  {item.change_notes.map((n, j) => <span key={j} className="diff-note-pill">{n}</span>)}
+                                </div>
+                              )}
+                              <div className="diff-columns">
+                                {[
+                                  [result.contract_a, item.risk_a, item.text_a, diff?.left],
+                                  [result.contract_b, item.risk_b, item.text_b, diff?.right],
+                                ].map(([docTitle, risk, text, segs], side) => (
+                                  <div key={side} className="diff-pane">
+                                    <div className="diff-pane-head">
+                                      <span>{docTitle}</span>
+                                      <span className={`risk-pill risk-${risk || "low"}`}>{(risk || "low").toUpperCase()}</span>
+                                    </div>
+                                    {redline ? <RedlineText segments={segs} /> : <p>{text}</p>}
+                                  </div>
+                                ))}
+                              </div>
+                            </article>
+                          );
+                        })
+                  )}
+
+                  {(tab === "added" || tab === "removed") && (
+                    result[tab].length === 0
+                      ? <div className="surface-card state-box"><p>No {tab} clauses found.</p></div>
+                      : result[tab].map((item, i) => (
+                          <article key={i} className={`surface-card diff-single diff-${tab}`}>
+                            <div className="diff-card-head">
+                              <span className="clause-category">{tab === "added" ? "Added" : "Removed"} · {item.clause_type}</span>
+                              <span className={`risk-pill risk-${item.risk_level || "low"}`}>{(item.risk_level || "low").toUpperCase()}</span>
+                            </div>
+                            <p className="clause-quote">{item.text}</p>
+                          </article>
+                        ))
+                  )}
+
+                  {tab === "unchanged" && (
+                    result.unchanged.length === 0
+                      ? <div className="surface-card state-box"><p>No identical clauses found.</p></div>
+                      : result.unchanged.map((item, i) => (
+                          <article key={i} className="surface-card diff-single">
                             <div className="diff-card-head">
                               <span className="clause-category">{item.clause_type}</span>
-                              <span className="mono-caption">{Math.round((item.similarity || 0) * 100)}% semantic match</span>
+                              <span className="mono-caption">Unchanged</span>
                             </div>
-                            {item.change_notes?.length > 0 && (
-                              <div className="diff-notes">
-                                {item.change_notes.map((n, j) => <span key={j} className="diff-note-pill">{n}</span>)}
-                              </div>
-                            )}
-                            <div className="diff-columns">
-                              {[
-                                [result.contract_a, item.risk_a, item.text_a, diff?.left],
-                                [result.contract_b, item.risk_b, item.text_b, diff?.right],
-                              ].map(([docTitle, risk, text, segs], side) => (
-                                <div key={side} className="diff-pane">
-                                  <div className="diff-pane-head">
-                                    <span>{docTitle}</span>
-                                    <span className={`risk-pill risk-${risk || "low"}`}>{(risk || "low").toUpperCase()}</span>
-                                  </div>
-                                  {redline ? <RedlineText segments={segs} /> : <p>{text}</p>}
-                                </div>
-                              ))}
-                            </div>
+                            <p className="clause-quote">{item.text_a}</p>
                           </article>
-                        );
-                      })
-                )}
-
-                {(tab === "added" || tab === "removed") && (
-                  result[tab].length === 0
-                    ? <div className="surface-card state-box"><p>No {tab} clauses found.</p></div>
-                    : result[tab].map((item, i) => (
-                        <article key={i} className={`surface-card diff-single diff-${tab}`}>
-                          <div className="diff-card-head">
-                            <span className="clause-category">{tab === "added" ? "Added" : "Removed"} · {item.clause_type}</span>
-                            <span className={`risk-pill risk-${item.risk_level || "low"}`}>{(item.risk_level || "low").toUpperCase()}</span>
-                          </div>
-                          <p className="clause-quote">{item.text}</p>
-                        </article>
-                      ))
-                )}
-
-                {tab === "unchanged" && (
-                  result.unchanged.length === 0
-                    ? <div className="surface-card state-box"><p>No identical clauses found.</p></div>
-                    : result.unchanged.map((item, i) => (
-                        <article key={i} className="surface-card diff-single">
-                          <div className="diff-card-head">
-                            <span className="clause-category">{item.clause_type}</span>
-                            <span className="mono-caption">Unchanged</span>
-                          </div>
-                          <p className="clause-quote">{item.text_a}</p>
-                        </article>
-                      ))
-                )}
-              </div>
+                        ))
+                  )}
+                </FadePanel>
+              </AnimatePresence>
             </div>
           )}
         </>
       )}
-    </div>
+    </PageReveal>
   );
 }

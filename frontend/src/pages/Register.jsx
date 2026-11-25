@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { authApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { BrandMark, CheckCircleIcon, EyeIcon, EyeOffIcon } from "../components/Icons";
+import { PageReveal } from "../components/Motion";
 
 function evaluatePassword(pw) {
   const hasMinLen = pw.length >= 8;
@@ -71,7 +72,7 @@ export default function Register() {
   };
 
   return (
-    <div className="auth-split">
+    <PageReveal className="auth-split">
       <aside className="auth-aside">
         <BrandMark size={32} />
         <h2 className="auth-aside-title">Build a searchable, private library of your agreements.</h2>
@@ -207,6 +208,6 @@ export default function Register() {
           </Link>
         </p>
       </section>
-    </div>
+    </PageReveal>
   );
 }

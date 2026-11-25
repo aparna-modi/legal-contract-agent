@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { systemApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { CheckCircleIcon, ClockIcon, LockIcon, RefreshIcon, ServerIcon, ShieldCheckIcon } from "../components/Icons";
+import { PageReveal } from "../components/Motion";
 
 const fmtDate = (d) =>
   d ? new Date(d).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -54,7 +55,7 @@ export default function AdminDashboard() {
   const logs = data?.auditLogs || [];
 
   return (
-    <div className="workspace-page">
+    <PageReveal className="workspace-page">
       <div className="page-header">
         <div>
           <h1 className="page-heading">Platform Admin Console</h1>
@@ -171,6 +172,6 @@ export default function AdminDashboard() {
           </div>
         </>
       )}
-    </div>
+    </PageReveal>
   );
 }
