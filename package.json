@@ -17,6 +17,7 @@
     "eval:rag:offline": "node -e \"const {spawn}=require('child_process'),fs=require('fs'),p=require('path'),d=p.join(process.cwd(),'ai-service'),py=[p.join(d,'.venv/Scripts/python.exe'),p.join(d,'.venv/bin/python')].find(fs.existsSync)||'python';spawn(py,['eval/evaluate_rag.py','--offline'],{cwd:d,stdio:'inherit'}).on('exit',c=>process.exit(c||0))\"",
     "backend:test": "npm --prefix backend test",
     "test:e2e": "node scripts/test_e2e.js",
+    "test:ai": "node -e \"const {spawn}=require('child_process'),fs=require('fs'),p=require('path'),d=p.join(process.cwd(),'ai-service'),py=[p.join(d,'.venv/Scripts/python.exe'),p.join(d,'.venv/bin/python')].find(fs.existsSync)||'python';spawn(py,['tests/test_ai_live.py'],{cwd:process.cwd(),stdio:'inherit'}).on('exit',c=>process.exit(c||0))\"",
     "test": "npm run backend:test && npm run ai:test && npm run test:pipeline && npm run test:e2e"
   },
   "devDependencies": {

@@ -1,0 +1,17 @@
+VENDOR SERVICES AGREEMENT (V1)
+Effective January 10, 2026 between Alpha Digital Corp. and Beta Retail LLC.
+
+1. PAYMENT TERMS
+Client shall pay $10,000 per month within 30 days of invoice receipt.
+
+2. TERMINATION
+Either party may terminate this agreement upon 30 days prior written notice.
+
+3. INDEMNIFICATION
+Vendor shall indemnify Client against third-party intellectual property infringement claims.
+
+4. CONFIDENTIALITY
+Both parties shall keep confidential information private for three (3) years.
+
+5. GOVERNING LAW
+This Agreement is governed by the laws of the State of California.
