@@ -16,7 +16,7 @@ router.get("/overview", protect, async (req, res) => {
       ? { $or: [{ user: userId }, { organization: req.user.organizationId, visibility: "team" }] }
       : { user: userId };
     const [docs, qaList, fbRows, recentActivity] = await Promise.all([
-      DocumentModel.find(docFilter).select("title fileName status riskSummary missingClauses totalTokens pageCount createdAt").lean(),
+      DocumentModel.find(docFilter).select("title fileName status riskSummary missingClauses keyFacts totalTokens pageCount createdAt").lean(),
       QuestionAnswerModel.find({ user: userId }).select("insufficientInformation confidence latencyMs").lean(),
       FeedbackModel.aggregate([{ $match: { user: userId } }, { $group: { _id: "$rating", count: { $sum: 1 } } }]),
       AuditLogModel.find({ user: userId }).sort({ createdAt: -1 }).limit(12).select("action resourceType resourceId summary createdAt").lean(),
@@ -57,6 +57,22 @@ router.get("/overview", protect, async (req, res) => {
     }
     const missingProtections = [...missingMap.values()].sort((a, b) => b.count - a.count).slice(0, 6);
 
+    const portfolioObligations = [];
+    for (const doc of analyzed) {
+      const obs = doc.keyFacts?.obligationsAndDeadlines || [];
+      for (const ob of obs.slice(0, 4)) {
+        if (!ob?.obligation) continue;
+        portfolioObligations.push({
+          contractId: doc._id,
+          contractTitle: doc.title || doc.fileName,
+          party: ob.party || "Contracting Party",
+          obligation: ob.obligation,
+          deadline: ob.deadline || "Ongoing",
+          sourceRef: ob.sourceRef || "",
+        });
+      }
+    }
+
     const totalQuestions = qaList.length;
     const refusalCount = qaList.filter((q) => q.insufficientInformation).length;
     const avgLatencyMs = totalQuestions ? Math.round(qaList.reduce((s, q) => s + (q.latencyMs || 0), 0) / totalQuestions) : 0;
@@ -74,6 +90,7 @@ router.get("/overview", protect, async (req, res) => {
       riskDistribution,
       topCategories,
       missingProtections,
+      portfolioObligations: portfolioObligations.slice(0, 16),
       qaMetrics: {
         totalQuestions,
         groundedCount: totalQuestions - refusalCount,

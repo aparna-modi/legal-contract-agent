@@ -24,11 +24,11 @@ BALANCED_GEMINI_MODELS = (
     "gemini-3.5-flash",
 )
 STRONG_GEMINI_MODELS = (
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
 )
-MODEL_TRANSIENT_COOLDOWN_SECONDS = 15.0
+MODEL_TRANSIENT_COOLDOWN_SECONDS = 45.0
 MODEL_NOT_FOUND_COOLDOWN_SECONDS = 300.0
 
 
@@ -40,6 +40,7 @@ class LLMClient:
         self._disabled_openai_keys: set[str] = set()
         self._model_cooldowns: dict[str, float] = {}
         self._clients: dict[str, object] = {}
+        self._last_used_model: Optional[str] = None
 
     def _get_gemini_key(self) -> Optional[str]:
         key = (os.environ.get("GEMINI_API_KEY") or "").strip()
@@ -82,7 +83,8 @@ class LLMClient:
 
     def get_active_provider(self) -> str:
         if self._get_gemini_key():
-            return f"gemini ({self._model_candidates()[0]})"
+            active = self._last_used_model or self._model_candidates()[0]
+            return f"gemini ({active})"
         if self._get_openai_key():
             return "openai (gpt-4o-mini)"
         return "local-extractive"
@@ -224,6 +226,7 @@ class LLMClient:
                     )
                     output = getattr(resp, "text", None)
                     if output and output.strip():
+                        self._last_used_model = model
                         return output.strip()
                     break
                 except Exception as exc:
@@ -232,13 +235,14 @@ class LLMClient:
                     if any(k in msg for k in ("api key", "401", "403", "permission")):
                         self._disabled_gemini_keys.add(api_key)
                         return None
-                    is_transient = any(k in msg for k in ("503", "429", "timeout", "timed out", "unavailable"))
-                    if is_transient and attempt == 0 and (deadline - time.monotonic()) > 4.0:
-                        time.sleep(0.8)
+                    is_quota = any(k in msg for k in ("429", "quota", "resource_exhausted"))
+                    is_transient = any(k in msg for k in ("503", "timeout", "timed out", "unavailable"))
+                    if is_transient and not is_quota and attempt == 0 and (deadline - time.monotonic()) > 4.0:
+                        time.sleep(0.7)
                         continue
-                    if any(k in msg for k in ("not found", "404")):
+                    if any(k in msg for k in ("not found", "404", "400", "invalid_argument")):
                         self._model_cooldowns[model] = time.monotonic() + MODEL_NOT_FOUND_COOLDOWN_SECONDS
-                    elif any(k in msg for k in ("503", "429", "quota", "timeout", "timed out")):
+                    elif is_quota or is_transient:
                         self._model_cooldowns[model] = time.monotonic() + MODEL_TRANSIENT_COOLDOWN_SECONDS
                     break
         return None

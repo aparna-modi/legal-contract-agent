@@ -135,6 +135,8 @@ class RedlineRequest(BaseModel):
     risk_level: str = Field(default="high", max_length=20)
     risk_reason: str = Field(default="", max_length=1000)
     playbook_guidance: str = Field(default="", max_length=1000)
+    stance: str = Field(default="balanced", max_length=32)
+    custom_instruction: str = Field(default="", max_length=600)
 
 
 class PlaybookEvaluateRequest(BaseModel):
@@ -142,6 +144,21 @@ class PlaybookEvaluateRequest(BaseModel):
     missing_clauses: List[Dict[str, Any]] = Field(default_factory=list)
     key_facts: Dict[str, Any] = Field(default_factory=dict)
     rules: List[Dict[str, Any]] = Field(default_factory=list)
+    use_ai_audit: bool = False
+
+
+class GeneratePlaybookRulesRequest(BaseModel):
+    policy_text: str = Field(..., min_length=10, max_length=3000)
+    jurisdiction: str = Field(default="", max_length=160)
+
+
+class DraftMissingClauseRequest(BaseModel):
+    clause_type: str = Field(..., min_length=1, max_length=140)
+    document_name: str = Field(default="Commercial Agreement", max_length=240)
+    parties: List[str] = Field(default_factory=list, max_length=8)
+    jurisdiction: str = Field(default="Not specified", max_length=160)
+    reason: str = Field(default="", max_length=600)
+    existing_summary: str = Field(default="", max_length=2000)
 
 
 class DraftContractRequest(BaseModel):
@@ -155,6 +172,13 @@ class DraftContractRequest(BaseModel):
     payment_terms: str = Field(default="", max_length=400)
     notice_period: str = Field(default="", max_length=120)
     special_instructions: str = Field(default="", max_length=1500)
+
+
+class ReviseDraftRequest(BaseModel):
+    title: str = Field(default="Contract Draft", max_length=200)
+    current_text: str = Field(..., min_length=50, max_length=60_000)
+    instruction: str = Field(..., min_length=5, max_length=1500)
+    jurisdiction: str = Field(default="India (Indian Contract Act, 1872)", max_length=160)
 
 
 AUTH = [Depends(require_internal_auth)]
@@ -349,6 +373,8 @@ async def suggest_redline(payload: RedlineRequest):
         risk_level=payload.risk_level,
         risk_reason=payload.risk_reason,
         playbook_guidance=payload.playbook_guidance,
+        stance=payload.stance,
+        custom_instruction=payload.custom_instruction,
     )
 
 
@@ -359,6 +385,27 @@ async def evaluate_playbook(payload: PlaybookEvaluateRequest):
         missing_clauses=payload.missing_clauses,
         key_facts=payload.key_facts,
         rules=payload.rules,
+        use_ai_audit=payload.use_ai_audit,
+    )
+
+
+@app.post("/api/v1/playbook/generate-rules", tags=["Playbook & Redline"], dependencies=AUTH)
+async def generate_playbook_rules(payload: GeneratePlaybookRulesRequest):
+    return playbook_service.generate_rules_from_policy(
+        policy_text=payload.policy_text,
+        jurisdiction=payload.jurisdiction,
+    )
+
+
+@app.post("/api/v1/draft-clause", tags=["Drafting"], dependencies=AUTH)
+async def draft_missing_clause(payload: DraftMissingClauseRequest):
+    return analysis_service.draft_missing_clause(
+        clause_type=payload.clause_type,
+        document_name=payload.document_name,
+        parties=payload.parties,
+        jurisdiction=payload.jurisdiction,
+        reason=payload.reason,
+        existing_summary=payload.existing_summary,
     )
 
 
@@ -380,6 +427,16 @@ async def draft_contract(payload: DraftContractRequest):
         payment_terms=payload.payment_terms,
         notice_period=payload.notice_period,
         special_instructions=payload.special_instructions,
+    )
+
+
+@app.post("/api/v1/draft/revise", tags=["Drafting"], dependencies=AUTH)
+async def revise_contract_draft(payload: ReviseDraftRequest):
+    return drafting_service.revise_draft(
+        title=payload.title,
+        current_text=payload.current_text,
+        instruction=payload.instruction,
+        jurisdiction=payload.jurisdiction,
     )
 
 

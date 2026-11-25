@@ -149,6 +149,39 @@ router.put("/", protect, async (req, res) => {
   }
 });
 
+router.post("/generate-rules", protect, aiLimiter, async (req, res) => {
+  try {
+    const { policyText = "", jurisdiction = "" } = req.body || {};
+    const cleaned = String(policyText || "").trim();
+    if (cleaned.length < 10) {
+      return res.status(400).json({ message: "Describe your legal policy in at least 10 characters." });
+    }
+    const aiRes = await aiClient.request("/api/v1/playbook/generate-rules", {
+      method: "POST",
+      requestId: req.requestId,
+      timeoutMs: 35000,
+      body: {
+        policy_text: cleaned.slice(0, 3000),
+        jurisdiction: String(jurisdiction || "").slice(0, 160),
+      },
+    });
+    if (!aiRes.ok) {
+      const err = await aiRes.json().catch(() => ({}));
+      return res.status(aiRes.status).json({ message: err.detail || "Failed to generate playbook rules." });
+    }
+    const generated = await aiRes.json();
+    recordAudit(req, {
+      action: "playbook_rules_generated",
+      resourceType: "playbook",
+      summary: `Generated ${(generated.rules || []).length} playbook rule(s) from natural-language policy`,
+    });
+    res.json(generated);
+  } catch (err) {
+    console.error("Generate playbook rules error:", err.message);
+    res.status(err?.status || 500).json({ message: "Failed to generate playbook rules." });
+  }
+});
+
 router.post("/evaluate/:contractId", protect, aiLimiter, async (req, res) => {
   try {
     const { contractId } = req.params;
@@ -162,20 +195,29 @@ router.post("/evaluate/:contractId", protect, aiLimiter, async (req, res) => {
       String(contract.organization) === String(req.user.organizationId);
     if (!isOwner && !isTeam) return res.status(403).json({ message: "Unauthorized access to this contract." });
 
+    const { presetId = "", useAiAudit = true } = req.body || {};
     const [playbook, clauses] = await Promise.all([
       getOrCreatePlaybook(req.user),
       ClauseModel.find({ document: contract._id }).lean(),
     ]);
     if (!clauses.length) return res.status(400).json({ message: "Analyze this contract before evaluating against your playbook." });
 
+    const activePreset = presetId && JURISDICTION_PRESETS[presetId] ? JURISDICTION_PRESETS[presetId] : null;
+    const evalName = activePreset ? `${activePreset.label} Pack` : playbook.name;
+    const evalRules = activePreset
+      ? activePreset.rules.map((r, idx) => ({ id: `${presetId}_${idx}`, name: r.name, ruleType: r.ruleType, target: r.target, severity: r.severity, guidance: r.guidance || "", enabled: true }))
+      : playbook.rules.map((r) => ({ id: String(r._id), name: r.name, ruleType: r.ruleType, target: r.target, severity: r.severity, guidance: r.guidance || "", enabled: r.enabled }));
+
     const aiRes = await aiClient.request("/api/v1/playbook/evaluate", {
       method: "POST",
       requestId: req.requestId,
+      timeoutMs: 45000,
       body: {
         clauses: clauses.map((c) => ({ clause_type: c.clauseType, text: c.text, risk_level: c.riskLevel })),
         missing_clauses: contract.missingClauses || [],
         key_facts: contract.keyFacts || {},
-        rules: playbook.rules.map((r) => ({ id: String(r._id), name: r.name, ruleType: r.ruleType, target: r.target, severity: r.severity, guidance: r.guidance || "", enabled: r.enabled })),
+        rules: evalRules,
+        use_ai_audit: Boolean(useAiAudit),
       },
     });
     if (!aiRes.ok) {
@@ -184,8 +226,8 @@ router.post("/evaluate/:contractId", protect, aiLimiter, async (req, res) => {
     }
 
     const evaluation = await aiRes.json();
-    recordAudit(req, { action: "playbook_evaluated", resourceType: "contract", resourceId: contract._id, summary: `Evaluated "${contract.title}" against "${playbook.name}" (${evaluation.compliance_score}% compliant)` });
-    res.json({ playbookName: playbook.name, contractId: contract._id, contractTitle: contract.title, ...evaluation });
+    recordAudit(req, { action: "playbook_evaluated", resourceType: "contract", resourceId: contract._id, summary: `Evaluated "${contract.title}" against "${evalName}" (${evaluation.compliance_score}% compliant)` });
+    res.json({ playbookName: evalName, contractId: contract._id, contractTitle: contract.title, ...evaluation });
   } catch (err) {
     console.error("Evaluate playbook error:", err.message);
     res.status(err?.status || 500).json({ message: "Failed to evaluate contract against playbook." });

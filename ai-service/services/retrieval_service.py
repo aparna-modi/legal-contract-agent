@@ -79,7 +79,7 @@ BROAD_QUERY_HINTS = (
 )
 
 # Max characters of full document context to include directly alongside top ranked passages.
-FULL_DOC_CONTEXT_CHAR_LIMIT = 32_000
+FULL_DOC_CONTEXT_CHAR_LIMIT = 56_000
 
 LEGAL_DISCLAIMER = (
     "AI-assisted contract review for informational purposes only. "
@@ -124,6 +124,10 @@ class GroundedAnswerSchema(BaseModel):
     indian_law_refs: List[str] = Field(
         default_factory=list,
         description="Applicable Indian Acts and Sections when legally relevant (e.g., 'Indian Contract Act, 1872 — Section 74').",
+    )
+    suggested_followups: List[str] = Field(
+        default_factory=list,
+        description="2-3 concise, practical follow-up questions grounded in this contract that the reviewer should ask next.",
     )
 
 
@@ -335,6 +339,10 @@ class RetrievalService:
             "answer": body,
             "cited_chunk_ids": [str(p.get("chunk_id", "")) for p in passages[:3] if p.get("chunk_id")],
             "indian_law_refs": law_refs[:3],
+            "suggested_followups": [
+                "What are the exact cure periods or penalties tied to this obligation?",
+                "Are there any carve-outs or exceptions to this clause?",
+            ],
             "provider": "local-extractive",
         }
 
@@ -471,6 +479,7 @@ class RetrievalService:
             "answer": synthesis["answer"],
             "citations": list(dict.fromkeys(p["citation"] for p in shown_passages)),
             "indian_law_refs": synthesis.get("indian_law_refs", []),
+            "suggested_followups": synthesis.get("suggested_followups", []),
             "provider": synthesis["provider"],
             "disclaimer": LEGAL_DISCLAIMER,
         }
@@ -533,16 +542,19 @@ class RetrievalService:
         conversation_history: Optional[List[Dict[str, str]]] = None,
         document_title: Optional[str] = None,
     ) -> Dict[str, Any]:
-        top_passages = passages[:10]
+        top_passages = passages[:14]
         top_ids = {str(p.get("chunk_id") or "") for p in top_passages}
 
         excerpt_blocks = "\n\n".join(
-            f"<contract_excerpt id=\"{p.get('chunk_id', i)}\" source=\"{p['citation']}\">\n{p['text']}\n</contract_excerpt>"
+            f"<contract_excerpt id=\"{p.get('chunk_id', i)}\" source=\"{p['citation']}\""
+            + (f" document_id=\"{p.get('document_id')}\"" if (not document_title and p.get("document_id")) else "")
+            + f">\n{p['text']}\n</contract_excerpt>"
             for i, p in enumerate(top_passages, 1)
         )
 
         # Include full ordered contract context when it fits comfortably in the prompt budget
         # so the model can answer ANY question about ANY detail in the document.
+        # For very large agreements (>56k chars), always attach Page 1 preamble so parties/dates stay anchored.
         full_doc_section = ""
         if full_doc_chunks:
             total_chars = sum(len(c.get("text", "")) for c in full_doc_chunks)
@@ -555,6 +567,20 @@ class RetrievalService:
                     ]
                     full_doc_section = (
                         "\n\nAdditional Contract Context (remaining sections of the same document, ordered by page):\n"
+                        "<full_contract>\n" + "\n\n".join(lines) + "\n</full_contract>"
+                    )
+            else:
+                preamble_chunks = [
+                    c for c in full_doc_chunks[:3]
+                    if str(c.get("chunk_id") or "") not in top_ids and int(c.get("page_number", 1) or 1) <= 2
+                ]
+                if preamble_chunks:
+                    lines = [
+                        f"[id={c.get('chunk_id', '')} | Page {c.get('page_number', 1)} | {c.get('section', 'Preamble')}] {c.get('text', '')[:900]}"
+                        for c in preamble_chunks
+                    ]
+                    full_doc_section = (
+                        "\n\nOpening Preamble Context (parties, title & effective date):\n"
                         "<full_contract>\n" + "\n\n".join(lines) + "\n</full_contract>"
                     )
 
@@ -604,6 +630,9 @@ class RetrievalService:
                 "answer": structured.answer.strip(),
                 "cited_chunk_ids": [str(cid).strip() for cid in (structured.cited_chunk_ids or []) if str(cid).strip()],
                 "indian_law_refs": refs[:4],
+                "suggested_followups": [
+                    q.strip() for q in (structured.suggested_followups or []) if q and q.strip()
+                ][:3],
                 "provider": llm_client.get_active_provider(),
             }
 

@@ -49,6 +49,7 @@ LEGAL_KEYWORDS = {
 }
 
 DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
+EMBED_QUOTA_COOLDOWN_SECONDS = 90.0
 
 
 def l2_normalize(vec: List[float]) -> List[float]:
@@ -131,6 +132,7 @@ class EmbeddingService:
         self.model_name = os.environ.get("GEMINI_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
         self._disabled_gemini_keys: set[str] = set()
         self._disabled_openai_keys: set[str] = set()
+        self._model_cooldowns: dict[str, float] = {}
         self._genai_clients: dict[str, object] = {}
         self.last_used_neural: bool = False
 
@@ -179,6 +181,10 @@ class EmbeddingService:
         try:
             from google.genai import types
 
+            model_id = self.model_name
+            if self._model_cooldowns.get(model_id, 0.0) > time.monotonic():
+                return None
+
             client = self._get_genai_client(api_key)
             results: List[List[float]] = []
 
@@ -191,18 +197,21 @@ class EmbeddingService:
                     task_type=task_type,
                 )
                 response = None
-                for attempt in range(3):
+                for attempt in range(2):
                     try:
                         response = client.models.embed_content(
-                            model=self.model_name,
+                            model=model_id,
                             contents=slice_texts,
                             config=config,
                         )
                         break
                     except Exception as call_exc:
                         call_msg = str(call_exc).lower()
-                        if any(tok in call_msg for tok in ("429", "quota", "rate", "503", "unavailable", "timeout")) and attempt < 2:
-                            time.sleep(1.2 * (attempt + 1))
+                        if any(tok in call_msg for tok in ("429", "quota", "resource_exhausted")):
+                            self._model_cooldowns[model_id] = time.monotonic() + EMBED_QUOTA_COOLDOWN_SECONDS
+                            return None
+                        if any(tok in call_msg for tok in ("503", "unavailable", "timeout")) and attempt == 0:
+                            time.sleep(0.8)
                             continue
                         raise
                 embeddings = getattr(response, "embeddings", None) or []
@@ -220,6 +229,8 @@ class EmbeddingService:
             err_msg = str(exc).lower()
             if any(tok in err_msg for tok in ("api key", "401", "403", "404", "not found", "permission")):
                 self._disabled_gemini_keys.add(api_key)
+            elif any(tok in err_msg for tok in ("429", "quota", "resource_exhausted", "503", "timeout")):
+                self._model_cooldowns[self.model_name] = time.monotonic() + EMBED_QUOTA_COOLDOWN_SECONDS
             return None
 
     def _embed_with_openai(self, texts: List[str]) -> Optional[List[List[float]]]:

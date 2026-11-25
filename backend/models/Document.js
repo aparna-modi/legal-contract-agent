@@ -132,6 +132,12 @@ const documentSchema = new mongoose.Schema(
       overallLevel: { type: String, enum: ["low", "medium", "high"], default: "low" },
       score: { type: Number, default: 0 },
     },
+    negotiationBrief: {
+      verdict: { type: String, default: "" },
+      counterpartyPosture: { type: String, default: "" },
+      topDealBreakers: { type: [String], default: [] },
+      negotiationPriorities: { type: [String], default: [] },
+    },
     missingClauses: {
       type: [missingClauseSchema],
       default: [],

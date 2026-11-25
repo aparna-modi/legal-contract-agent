@@ -249,6 +249,7 @@ async function runExtraction(contract, req, onProgress = () => {}) {
   const risk = analysis?.risk_summary || ext.risk_summary || {};
   const missing = analysis?.missing_clauses || ext.missing_clauses || [];
   const kf = analysis?.key_facts || {};
+  const nb = analysis?.negotiation_brief || {};
 
   Object.assign(contract, {
     status: "completed",
@@ -262,6 +263,12 @@ async function runExtraction(contract, req, onProgress = () => {}) {
     fullText: String(ext.full_text || "").slice(0, 450000),
     summary: analysis?.executive_summary || "",
     analysisProvider: analysis?.provider || "",
+    negotiationBrief: {
+      verdict: String(nb.verdict || ""),
+      counterpartyPosture: String(nb.counterparty_posture || ""),
+      topDealBreakers: Array.isArray(nb.top_deal_breakers) ? nb.top_deal_breakers.map(String) : [],
+      negotiationPriorities: Array.isArray(nb.negotiation_priorities) ? nb.negotiation_priorities.map(String) : [],
+    },
     keyFacts: {
       parties: kf.parties || [],
       effectiveDate: kf.effective_date || "Not specified",
@@ -670,6 +677,87 @@ router.post("/draft", protect, aiLimiter, async (req, res) => {
   }
 });
 
+router.post("/draft/revise", protect, aiLimiter, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const title = String(b.title || "Contract Draft").slice(0, 200);
+    const currentText = String(b.currentText ?? b.current_text ?? "").trim();
+    const instruction = String(b.instruction || "").trim();
+    const jurisdiction = String(b.jurisdiction || "India (Indian Contract Act, 1872)").slice(0, 160);
+    if (currentText.length < 50) {
+      return res.status(400).json({ message: "Current draft text is too short to revise." });
+    }
+    if (instruction.length < 5) {
+      return res.status(400).json({ message: "Please provide a clear revision instruction." });
+    }
+    const aiRes = await aiClient.request("/api/v1/draft/revise", {
+      method: "POST",
+      requestId: req.requestId,
+      timeoutMs: 60000,
+      body: {
+        title,
+        current_text: currentText.slice(0, 60000),
+        instruction: instruction.slice(0, 1500),
+        jurisdiction,
+      },
+    });
+    if (!aiRes.ok) {
+      const err = await aiRes.json().catch(() => ({}));
+      return res.status(aiRes.status).json({ message: err.detail || "AI draft revision failed." });
+    }
+    const revised = await aiRes.json();
+    recordAudit(req, {
+      action: "draft_revised",
+      resourceType: "contract",
+      summary: `Revised draft "${revised.title || title}" (${(revised.changes_made || []).length} changes)`,
+    });
+    res.json(revised);
+  } catch (err) {
+    console.error("Draft revision error:", err.message);
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to revise contract draft." });
+  }
+});
+
+router.post("/clauses/redline-adhoc", protect, aiLimiter, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const clauseType = String(b.clauseType ?? b.clause_type ?? "Commercial Clause").slice(0, 120);
+    const clauseText = String(b.clauseText ?? b.clause_text ?? "").trim();
+    const riskLevel = String(b.riskLevel ?? b.risk_level ?? "medium").slice(0, 20);
+    const riskReason = String(b.riskReason ?? b.risk_reason ?? "").slice(0, 1000);
+    const stance = String(b.stance || "balanced").slice(0, 32);
+    const customInstruction = String(b.customInstruction ?? b.custom_instruction ?? "").slice(0, 600);
+    if (!clauseText) return res.status(400).json({ message: "Clause text is required." });
+
+    const aiRes = await aiClient.request("/api/v1/redline", {
+      method: "POST",
+      requestId: req.requestId,
+      body: {
+        clause_type: clauseType,
+        clause_text: clauseText.slice(0, 10000),
+        risk_level: riskLevel,
+        risk_reason: riskReason,
+        stance,
+        custom_instruction: customInstruction,
+      },
+    });
+    if (!aiRes.ok) {
+      const err = await aiRes.json().catch(() => ({}));
+      return res.status(aiRes.status).json({ message: err.detail || "Could not draft counter-redline." });
+    }
+    const suggestion = await aiRes.json();
+    recordAudit(req, {
+      action: "redline_suggested",
+      resourceType: "comparison",
+      summary: `Generated counter-redline for "${clauseType}" (${stance})`,
+    });
+    res.json(suggestion);
+  } catch (err) {
+    console.error("Ad-hoc redline error:", err.message);
+    res.status(err?.status || 500).json({ message: "Failed to generate counter-redline." });
+  }
+});
+
 router.post("/draft/save", protect, uploadLimiter, async (req, res) => {
   try {
     const b = req.body || {};
@@ -945,6 +1033,7 @@ router.post("/:id/clauses/:clauseId/suggest-redline", protect, aiLimiter, async 
           r.name.toLowerCase().includes(clause.clauseType.toLowerCase()))
     );
 
+    const { stance = "balanced", customInstruction = "" } = req.body || {};
     const aiRes = await aiClient.request("/api/v1/redline", {
       method: "POST",
       requestId: req.requestId,
@@ -954,6 +1043,8 @@ router.post("/:id/clauses/:clauseId/suggest-redline", protect, aiLimiter, async 
         risk_level: clause.riskLevel || "medium",
         risk_reason: clause.riskReason || "",
         playbook_guidance: matchedRule?.guidance || "",
+        stance: String(stance || "balanced").slice(0, 32),
+        custom_instruction: String(customInstruction || "").slice(0, 600),
       },
     });
     if (!aiRes.ok) {
@@ -966,12 +1057,54 @@ router.post("/:id/clauses/:clauseId/suggest-redline", protect, aiLimiter, async 
       action: "redline_suggested",
       resourceType: "clause",
       resourceId: clause._id,
-      summary: `Generated fallback redline for "${clause.clauseType}" in "${contract.title}"`,
+      summary: `Generated ${stance} redline for "${clause.clauseType}" in "${contract.title}"`,
     });
     res.json({ clauseId: clause._id, ...suggestion });
   } catch (err) {
     console.error("Redline suggestion error:", err.message);
     res.status(err?.status || 500).json({ message: "Failed to generate clause redline suggestion." });
+  }
+});
+
+router.post("/:id/draft-missing-clause", protect, aiLimiter, async (req, res) => {
+  try {
+    const contract = await loadContract(req.params.id, req.user, res);
+    if (!contract) return;
+
+    const { clauseType, reason = "" } = req.body || {};
+    const cleanType = String(clauseType || "").trim().slice(0, 140);
+    if (!cleanType) return res.status(400).json({ message: "clauseType is required." });
+
+    const kf = contract.keyFacts || {};
+    const aiRes = await aiClient.request("/api/v1/draft-clause", {
+      method: "POST",
+      requestId: req.requestId,
+      timeoutMs: 40000,
+      body: {
+        clause_type: cleanType,
+        document_name: contract.title || contract.fileName,
+        parties: Array.isArray(kf.parties) ? kf.parties.slice(0, 6) : [],
+        jurisdiction: kf.governingLaw || "Not specified",
+        reason: String(reason || "").slice(0, 600),
+        existing_summary: String(contract.summary || "").slice(0, 1800),
+      },
+    });
+    if (!aiRes.ok) {
+      const err = await aiRes.json().catch(() => ({}));
+      return res.status(aiRes.status).json({ message: err.detail || "Could not draft missing clause." });
+    }
+
+    const drafted = await aiRes.json();
+    recordAudit(req, {
+      action: "missing_clause_drafted",
+      resourceType: "contract",
+      resourceId: contract._id,
+      summary: `Drafted missing "${cleanType}" clause for "${contract.title}"`,
+    });
+    res.json({ contractId: contract._id, ...drafted });
+  } catch (err) {
+    console.error("Draft missing clause error:", err.message);
+    res.status(err?.status || 500).json({ message: "Failed to draft missing clause." });
   }
 });
 
