@@ -110,6 +110,20 @@ const documentSchema = new mongoose.Schema(
       noticePeriod: { type: String, default: "Not specified" },
       governingLaw: { type: String, default: "Not specified" },
       keyObligations: { type: [String], default: [] },
+      obligationsAndDeadlines: {
+        type: [
+          new mongoose.Schema(
+            {
+              party: { type: String, default: "" },
+              obligation: { type: String, default: "" },
+              deadline: { type: String, default: "" },
+              sourceRef: { type: String, default: "" },
+            },
+            { _id: false }
+          ),
+        ],
+        default: [],
+      },
     },
     riskSummary: {
       high: { type: Number, default: 0 },

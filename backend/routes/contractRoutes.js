@@ -235,8 +235,9 @@ async function runExtraction(contract, req, onProgress = () => {}) {
       text: c.text,
       pageNumber: c.page_number || 1,
       sectionHeading: c.section_heading || "General",
-      riskLevel: c.risk_level || "low",
+      riskLevel: exp?.risk_level || c.risk_level || "low",
       riskReason:
+        exp?.risk_reason ||
         c.risk_reason ||
         (c.section_heading ? `Extracted under '${c.section_heading}'.` : "Standard contractual provision."),
       plainEnglish: exp?.plain_english || c.plain_english || "",
@@ -269,6 +270,14 @@ async function runExtraction(contract, req, onProgress = () => {}) {
       noticePeriod: kf.notice_period || "Not specified",
       governingLaw: kf.governing_law || "Not specified",
       keyObligations: kf.key_obligations || [],
+      obligationsAndDeadlines: Array.isArray(kf.obligations_and_deadlines)
+        ? kf.obligations_and_deadlines.map((ob) => ({
+            party: String(ob.party || "Contracting Party"),
+            obligation: String(ob.obligation || ""),
+            deadline: String(ob.deadline || "Ongoing"),
+            sourceRef: String(ob.source_ref || ob.sourceRef || ""),
+          }))
+        : [],
     },
     riskSummary: {
       high: risk.high || 0,
@@ -328,6 +337,18 @@ function buildReportMarkdown(contract, clauses) {
     `- **Governing Law:** ${f.governingLaw || "Not specified"}`,
     "",
   ];
+  if (f.obligationsAndDeadlines?.length) {
+    lines.push(
+      "## Obligations & Deadlines",
+      "| Party | Obligation | Deadline | Reference |",
+      "| --- | --- | --- | --- |",
+      ...f.obligationsAndDeadlines.map(
+        (ob) =>
+          `| ${String(ob.party || "Party").replace(/\|/g, "/")} | ${String(ob.obligation || "").replace(/\|/g, "/")} | ${String(ob.deadline || "Ongoing").replace(/\|/g, "/")} | ${String(ob.sourceRef || "—").replace(/\|/g, "/")} |`
+      ),
+      ""
+    );
+  }
   if (f.keyObligations?.length) {
     lines.push("## Key Obligations", ...f.keyObligations.map((o) => `- ${o}`), "");
   }
@@ -584,6 +605,132 @@ router.post("/compare", protect, aiLimiter, async (req, res) => {
   } catch (err) {
     console.error("Contract comparison error:", err.message);
     res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to compare contracts." });
+  }
+});
+
+router.get("/draft/templates", protect, async (req, res) => {
+  try {
+    const aiRes = await aiClient.request("/api/v1/draft/templates", {
+      requestId: req.requestId,
+      timeoutMs: 8000,
+    });
+    if (!aiRes.ok) return res.status(502).json({ message: "Unable to load contract templates." });
+    res.json(await aiRes.json());
+  } catch (err) {
+    console.error("Draft templates error:", err.message);
+    res.status(err?.status || 500).json({ message: "Failed to load contract drafting templates." });
+  }
+});
+
+router.post("/draft", protect, aiLimiter, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const contractType = b.contractType ?? b.contract_type ?? "msa";
+    const title = b.title ?? "";
+    const partyA = b.partyA ?? b.party_a ?? "";
+    const partyB = b.partyB ?? b.party_b ?? "";
+    const jurisdiction = b.jurisdiction ?? "India (Indian Contract Act, 1872)";
+    const effectiveDate = b.effectiveDate ?? b.effective_date ?? "";
+    const termDuration = b.termDuration ?? b.term_duration ?? "";
+    const paymentTerms = b.paymentTerms ?? b.payment_terms ?? "";
+    const noticePeriod = b.noticePeriod ?? b.notice_period ?? "";
+    const specialInstructions = b.specialInstructions ?? b.special_instructions ?? "";
+
+    const aiRes = await aiClient.request("/api/v1/draft", {
+      method: "POST",
+      requestId: req.requestId,
+      timeoutMs: 60000,
+      body: {
+        contract_type: String(contractType).slice(0, 40),
+        title: String(title).slice(0, 180),
+        party_a: String(partyA).slice(0, 160),
+        party_b: String(partyB).slice(0, 160),
+        jurisdiction: String(jurisdiction).slice(0, 160),
+        effective_date: String(effectiveDate).slice(0, 80),
+        term_duration: String(termDuration).slice(0, 120),
+        payment_terms: String(paymentTerms).slice(0, 400),
+        notice_period: String(noticePeriod).slice(0, 120),
+        special_instructions: String(specialInstructions).slice(0, 1500),
+      },
+    });
+    if (!aiRes.ok) {
+      const err = await aiRes.json().catch(() => ({}));
+      return res.status(aiRes.status).json({ message: err.detail || "AI drafting request failed." });
+    }
+    const draft = await aiRes.json();
+    recordAudit(req, {
+      action: "draft_generated",
+      resourceType: "contract",
+      summary: `Drafted "${draft.title || contractType}" (${draft.jurisdiction || jurisdiction})`,
+    });
+    res.json(draft);
+  } catch (err) {
+    console.error("Contract draft error:", err.message);
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to generate contract draft." });
+  }
+});
+
+router.post("/draft/save", protect, uploadLimiter, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const title = b.title;
+    const fullText = b.fullText ?? b.full_text ?? "";
+    const autoAnalyze = b.autoAnalyze ?? b.auto_analyze ?? true;
+    const visibility = b.visibility ?? "private";
+    const cleanText = String(fullText || "").trim();
+    if (cleanText.length < 50) {
+      return res.status(400).json({ message: "Draft text must be at least 50 characters to save." });
+    }
+    if (cleanText.length > 500000) {
+      return res.status(400).json({ message: "Draft text exceeds maximum allowed length." });
+    }
+    const cleanTitle = String(title || "Drafted Contract").trim().slice(0, 180) || "Drafted Contract";
+    const safeFileBase = cleanTitle.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "draft_contract";
+    const fileName = `${safeFileBase}.txt`;
+    const buf = Buffer.from(cleanText, "utf8");
+
+    const stored = await storageService.putObject({
+      key: `${req.user._id}/${Date.now()}-${fileName}`,
+      buffer: buf,
+      contentType: "text/plain; charset=utf-8",
+    });
+
+    const doc = await DocumentModel.create({
+      user: req.user._id,
+      organization: req.user.organizationId || null,
+      visibility: visibility === "team" && req.user.organizationId ? "team" : "private",
+      title: cleanTitle,
+      fileName,
+      filePath: stored.filePath || "",
+      storageProvider: stored.provider,
+      storageKey: stored.storageKey,
+      fileType: "txt",
+      fileSize: buf.length,
+      status: "uploaded",
+    });
+
+    recordAudit(req, {
+      action: "upload",
+      resourceType: "contract",
+      resourceId: doc._id,
+      summary: `Saved AI-drafted contract "${doc.title}" to workspace`,
+    });
+
+    if (autoAnalyze) {
+      const result = await runExtraction(doc, req);
+      return res.status(201).json({
+        message: "Draft saved and analyzed in your workspace.",
+        ...result,
+      });
+    }
+
+    res.status(201).json({
+      message: "Draft saved to your workspace.",
+      document: sanitizeContractResponse(doc),
+    });
+  } catch (err) {
+    console.error("Save draft error:", err.message);
+    res.status(err?.status || 500).json({ message: "Failed to save contract draft." });
   }
 });
 
@@ -937,7 +1084,7 @@ router.post("/:id/ask", protect, aiLimiter, async (req, res) => {
     const cleanHistory = Array.isArray(history)
       ? history
           .filter((h) => h && typeof h.query === "string")
-          .slice(-4)
+          .slice(-6)
           .map((h) => ({ query: String(h.query).slice(0, 300), answer: String(h.answer || "").slice(0, 500) }))
       : [];
 

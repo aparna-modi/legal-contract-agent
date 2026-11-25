@@ -47,6 +47,21 @@ class ClauseExplanationItem(BaseModel):
     indian_law_ref: str = Field(
         description="Applicable Indian Act(s) and Section(s), e.g., 'Indian Contract Act, 1872 — Section 74'."
     )
+    risk_level_override: str = Field(
+        default="",
+        description="Optional 'high' or 'medium' ONLY if this clause has a hidden semantic legal risk not caught by keyword rules; otherwise empty string.",
+    )
+    risk_reason_override: str = Field(
+        default="",
+        description="Short 1-sentence justification when risk_level_override is set; otherwise empty string.",
+    )
+
+
+class ObligationDeadlineItem(BaseModel):
+    party: str = Field(description="Which party holds this obligation (e.g., Client, Vendor, Both Parties).")
+    obligation: str = Field(description="Concise plain-English action required.")
+    deadline: str = Field(description="Exact timeframe, date, or trigger from the contract (or 'Ongoing').")
+    source_ref: str = Field(default="", description="Page and section reference if visible.")
 
 
 class ContractSummarySchema(BaseModel):
@@ -62,6 +77,10 @@ class ContractSummarySchema(BaseModel):
     key_obligations: List[str] = Field(
         default_factory=list,
         description="3-5 plain-English bullet points of key obligations and rights.",
+    )
+    obligations_and_deadlines: List[ObligationDeadlineItem] = Field(
+        default_factory=list,
+        description="Up to 8 structured obligations and concrete deadlines/triggers extracted directly from the contract.",
     )
     clause_explanations: List[ClauseExplanationItem] = Field(
         default_factory=list,
@@ -222,6 +241,33 @@ class ContractAnalysisService:
         )
 
         explanation_by_idx: Dict[int, ClauseExplanationItem] = {}
+        obligations_structured: List[Dict[str, str]] = []
+        if llm_res and llm_res.obligations_and_deadlines:
+            for ob in llm_res.obligations_and_deadlines[:8]:
+                if ob.obligation.strip():
+                    obligations_structured.append({
+                        "party": ob.party.strip() or "Both Parties",
+                        "obligation": ob.obligation.strip(),
+                        "deadline": ob.deadline.strip() or "Ongoing",
+                        "source_ref": ob.source_ref.strip(),
+                    })
+        else:
+            for c in classified_clauses[:6]:
+                text_clean = re.sub(r"\s+", " ", str(c.get("text") or "").strip())
+                if not text_clean:
+                    continue
+                dl_match = re.search(
+                    r"\b(within\s+\d+\s*(?:calendar\s+|business\s+)?days?|\d+\s*(?:days?|months?|years?)\s+(?:prior\s+)?(?:written\s+)?notice|net\s+\d+|on or before [^.,;]{3,35})\b",
+                    text_clean,
+                    re.IGNORECASE,
+                )
+                obligations_structured.append({
+                    "party": "Contracting Party",
+                    "obligation": f"{c.get('clause_type', 'Clause')}: {text_clean[:135]}{'...' if len(text_clean) > 135 else ''}",
+                    "deadline": dl_match.group(1) if dl_match else "Per agreement terms",
+                    "source_ref": f"Page {c.get('page_number', 1)}, {c.get('section_heading', 'General')}",
+                })
+
         if llm_res:
             for item in llm_res.clause_explanations or []:
                 explanation_by_idx[item.index] = item
@@ -233,25 +279,47 @@ class ContractAnalysisService:
                 "notice_period": llm_res.notice_period or fallback["notice_period"],
                 "governing_law": llm_res.governing_law or fallback["governing_law"],
                 "key_obligations": llm_res.key_obligations or fallback["key_obligations"],
+                "obligations_and_deadlines": obligations_structured,
             }
             summary = llm_res.executive_summary.strip() or fallback["executive_summary"]
             provider = llm_client.get_active_provider()
         else:
-            key_facts = {k: v for k, v in fallback.items() if k != "executive_summary"}
+            key_facts = {
+                **{k: v for k, v in fallback.items() if k != "executive_summary"},
+                "obligations_and_deadlines": obligations_structured,
+            }
             summary, provider = fallback["executive_summary"], "local-heuristic"
 
         enriched_clauses: List[Dict[str, Any]] = []
+        severity_rank = {"low": 0, "medium": 1, "high": 2}
+        recalculated_clauses: List[Dict[str, Any]] = []
         for idx, clause in enumerate(classified_clauses):
             exp = explanation_by_idx.get(idx)
             ctype = clause.get("clause_type", "General Provision")
             text = clause.get("text", "")
+            base_risk = str(clause.get("risk_level", "low")).lower()
+            base_reason = clause.get("risk_reason", "")
+            override_lvl = str(getattr(exp, "risk_level_override", "") or "").strip().lower()
+            override_reason = str(getattr(exp, "risk_reason_override", "") or "").strip()
+
+            # Allow AI to elevate subtle semantic risks without ever downgrading deterministic high-risk triggers.
+            final_risk = base_risk
+            final_reason = base_reason
+            if override_lvl in ("medium", "high") and severity_rank.get(override_lvl, 0) > severity_rank.get(base_risk, 0):
+                final_risk = override_lvl
+                if override_reason:
+                    final_reason = override_reason
+
+            recalculated_clauses.append({**clause, "risk_level": final_risk, "risk_reason": final_reason})
             enriched_clauses.append({
                 "index": idx,
                 "clause_type": ctype,
+                "risk_level": final_risk,
+                "risk_reason": final_reason,
                 "plain_english": (
                     exp.plain_english.strip()
                     if exp and exp.plain_english.strip()
-                    else clause.get("plain_english") or build_plain_english_fallback(ctype, text, clause.get("risk_reason", ""))
+                    else clause.get("plain_english") or build_plain_english_fallback(ctype, text, final_reason)
                 ),
                 "indian_law_ref": (
                     exp.indian_law_ref.strip()
@@ -259,6 +327,8 @@ class ContractAnalysisService:
                     else clause.get("indian_law_ref") or get_indian_law_reference(ctype, text)
                 ),
             })
+
+        risk_summary = summarize_risk_profile(recalculated_clauses, missing)
 
         return {
             "document_name": document_name,

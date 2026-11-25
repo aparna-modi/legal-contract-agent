@@ -35,6 +35,7 @@ const auditLogSchema = new mongoose.Schema(
         "search",
         "compare",
         "export_report",
+        "draft_generated",
         "delete",
         "feedback",
       ],

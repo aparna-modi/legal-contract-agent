@@ -13,6 +13,7 @@ load_dotenv()
 
 from extractors import ExtractionResult
 from services.analysis_service import analysis_service
+from services.drafting_service import drafting_service
 from services.embedding_service import embedding_service
 from services.extraction_service import ExtractionService
 from services.health_service import get_health_status
@@ -141,6 +142,19 @@ class PlaybookEvaluateRequest(BaseModel):
     missing_clauses: List[Dict[str, Any]] = Field(default_factory=list)
     key_facts: Dict[str, Any] = Field(default_factory=dict)
     rules: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class DraftContractRequest(BaseModel):
+    contract_type: str = Field(default="msa", max_length=40)
+    title: str = Field(default="", max_length=180)
+    party_a: str = Field(default="", max_length=160)
+    party_b: str = Field(default="", max_length=160)
+    jurisdiction: str = Field(default="India (Indian Contract Act, 1872)", max_length=160)
+    effective_date: str = Field(default="", max_length=80)
+    term_duration: str = Field(default="", max_length=120)
+    payment_terms: str = Field(default="", max_length=400)
+    notice_period: str = Field(default="", max_length=120)
+    special_instructions: str = Field(default="", max_length=1500)
 
 
 AUTH = [Depends(require_internal_auth)]
@@ -345,6 +359,27 @@ async def evaluate_playbook(payload: PlaybookEvaluateRequest):
         missing_clauses=payload.missing_clauses,
         key_facts=payload.key_facts,
         rules=payload.rules,
+    )
+
+
+@app.get("/api/v1/draft/templates", tags=["Drafting"], dependencies=AUTH)
+async def list_draft_templates():
+    return {"templates": drafting_service.list_templates()}
+
+
+@app.post("/api/v1/draft", tags=["Drafting"], dependencies=AUTH)
+async def draft_contract(payload: DraftContractRequest):
+    return drafting_service.generate_draft(
+        contract_type=payload.contract_type,
+        title=payload.title,
+        party_a=payload.party_a,
+        party_b=payload.party_b,
+        jurisdiction=payload.jurisdiction,
+        effective_date=payload.effective_date,
+        term_duration=payload.term_duration,
+        payment_terms=payload.payment_terms,
+        notice_period=payload.notice_period,
+        special_instructions=payload.special_instructions,
     )
 
 

@@ -175,7 +175,7 @@ router.post("/evaluate/:contractId", protect, aiLimiter, async (req, res) => {
         clauses: clauses.map((c) => ({ clause_type: c.clauseType, text: c.text, risk_level: c.riskLevel })),
         missing_clauses: contract.missingClauses || [],
         key_facts: contract.keyFacts || {},
-        rules: playbook.rules.map((r) => ({ id: String(r._id), name: r.name, ruleType: r.ruleType, target: r.target, severity: r.severity, enabled: r.enabled })),
+        rules: playbook.rules.map((r) => ({ id: String(r._id), name: r.name, ruleType: r.ruleType, target: r.target, severity: r.severity, guidance: r.guidance || "", enabled: r.enabled })),
       },
     });
     if (!aiRes.ok) {

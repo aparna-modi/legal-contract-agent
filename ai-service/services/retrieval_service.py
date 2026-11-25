@@ -560,13 +560,13 @@ class RetrievalService:
 
         history_section = ""
         if conversation_history:
-            recent = conversation_history[-3:]
+            recent = conversation_history[-6:]
             turns = []
             for turn in recent:
                 q_prev = str(turn.get("query") or "").strip()
                 a_prev = str(turn.get("answer") or "").strip()
                 if q_prev:
-                    turns.append(f"User: {q_prev}\nAssistant: {a_prev[:350]}")
+                    turns.append(f"User: {q_prev}\nAssistant: {a_prev[:400]}")
             if turns:
                 history_section = "Recent Conversation Context:\n" + "\n---\n".join(turns) + "\n\n"
 

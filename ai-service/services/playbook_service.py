@@ -172,6 +172,22 @@ class PlaybookService:
                 else:
                     detail = f"Notice period ({m.group(1)} days) meets playbook minimum ({min_days} days)."
 
+            guidance = str(rule.get("guidance") or "").strip()
+            remediation = ""
+            if status != "pass":
+                if guidance:
+                    remediation = guidance
+                elif rtype == "require_clause":
+                    remediation = f"Insert a balanced '{target}' clause before signing."
+                elif rtype == "forbidden_keyword":
+                    remediation = "Replace restricted wording with mutual, capped, or notice-backed terms."
+                elif rtype == "allowed_jurisdiction":
+                    remediation = f"Request governing law & venue in an approved jurisdiction ({target})."
+                elif rtype == "min_notice_days":
+                    remediation = f"Negotiate at least {target} days written notice and a cure period."
+                elif rtype == "max_high_risk":
+                    remediation = "Escalate unresolved high-risk provisions for legal counsel sign-off or redline."
+
             counts[status] += 1
             results.append({
                 "ruleId": str(rule.get("id") or rule.get("_id") or rule.get("name", "rule")),
@@ -180,6 +196,7 @@ class PlaybookService:
                 "severity": sev,
                 "status": status,
                 "detail": detail,
+                "remediation": remediation,
             })
 
         score = round(((counts["pass"] + 0.5 * counts["warn"]) / max(1, len(results))) * 100)
