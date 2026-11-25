@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { authApi } from "../api/client";
 import { BrandMark, LockIcon } from "../components/Icons";
+import { PageReveal } from "../components/Motion";
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
@@ -24,7 +25,7 @@ export default function ForgotPassword() {
   };
 
   return (
-    <div className="narrow-page">
+    <PageReveal className="narrow-page">
       <section className="surface-card upload-form" style={{ maxWidth: 480, margin: "28px auto" }}>
         <div className="auth-panel-head">
           <BrandMark size={28} />
@@ -80,6 +81,6 @@ export default function ForgotPassword() {
           </Link>
         </p>
       </section>
-    </div>
+    </PageReveal>
   );
 }

@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { analyticsApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { AlertTriangleIcon, BarChartIcon, ClockIcon, PlusIcon, RefreshIcon } from "../components/Icons";
-import { PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
+import { AnimatedNumber, PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
 import { EASE_EDITORIAL } from "../components/motionTokens";
 
 const ACTION_LABELS = {
@@ -12,7 +12,10 @@ const ACTION_LABELS = {
   logout_all: "Global Revoke", token_refresh: "Token Refresh", token_reuse_detected: "Security Alert",
   password_changed: "Password Changed", profile_updated: "Profile Updated", session_revoked: "Session Revoked",
   upload: "Upload", extract: "Analysis", ask: "Contract Q&A", search: "Library Search",
-  compare: "Comparison", draft_generated: "AI Draft", export_report: "Report Export", delete: "Deletion", feedback: "Feedback",
+  compare: "Comparison", draft_generated: "AI Draft", draft_revised: "Draft Revision",
+  redline_suggested: "Redline", missing_clause_drafted: "Missing Clause",
+  playbook_evaluated: "Playbook Audit", playbook_updated: "Playbook Saved",
+  playbook_rules_generated: "AI Rules", export_report: "Report Export", delete: "Deletion", feedback: "Feedback",
 };
 
 const fmtTime = (ts) =>
@@ -52,6 +55,7 @@ export default function Analytics() {
   const qa = data?.qaMetrics || {};
   const categories = data?.topCategories || [];
   const missing = data?.missingProtections || [];
+  const obligations = data?.portfolioObligations || [];
   const activity = data?.recentActivity || [];
 
   const totalRisk = dist.high + dist.medium + dist.low;
@@ -65,8 +69,8 @@ export default function Analytics() {
     <PageReveal className="workspace-page">
       <div className="page-header">
         <div>
-          <h1 className="page-heading">Risk &amp; Quality Analytics</h1>
-          <p className="page-description">Clause risk breakdown, recurring missing protections, Q&amp;A accuracy, and audit history.</p>
+          <h1 className="page-heading">Risk &amp; Portfolio Analytics</h1>
+          <p className="page-description">Clause risk distribution, portfolio deadlines, recurring missing protections, Q&amp;A accuracy, and audit trail.</p>
         </div>
         <div className="page-header-actions">
           <button type="button" className="btn btn-secondary" onClick={load} disabled={loading}>
@@ -77,14 +81,14 @@ export default function Analytics() {
       </div>
 
       {loading ? (
-        <div className="surface-card state-box"><div className="spinner" /><p>Aggregating analytics...</p></div>
+        <div className="surface-card state-box"><div className="spinner" /><p>Aggregating portfolio analytics...</p></div>
       ) : error ? (
         <div className="alert alert-error">{error}</div>
       ) : portfolio.totalContracts === 0 ? (
         <div className="surface-card empty-box">
-          <BarChartIcon size={28} />
+          <BarChartIcon size={26} />
           <h3>No analytics data yet</h3>
-          <p>Upload and analyze your first contract to unlock risk charts and audit insights.</p>
+          <p>Upload and analyze your first contract to unlock risk charts, deadline tracking, and audit insights.</p>
           <Link to="/upload" className="btn btn-primary">Upload Contract</Link>
         </div>
       ) : (
@@ -93,23 +97,25 @@ export default function Analytics() {
             <StaggerItem className="kpi-card">
               <span className="kpi-label">Average Risk Score</span>
               <span className={`kpi-value ${portfolio.avgRiskScore >= 60 ? "text-danger" : portfolio.avgRiskScore >= 28 ? "text-warn" : ""}`}>
-                {portfolio.avgRiskScore}<small className="kpi-unit">/100</small>
+                <AnimatedNumber value={portfolio.avgRiskScore} /><small className="kpi-unit">/100</small>
               </span>
               <span className="kpi-sub">Across {portfolio.analyzedContracts} analyzed docs</span>
             </StaggerItem>
             <StaggerItem className="kpi-card">
               <span className="kpi-label">Classified Clauses</span>
-              <span className="kpi-value">{portfolio.totalClauses}</span>
+              <span className="kpi-value"><AnimatedNumber value={portfolio.totalClauses} /></span>
               <span className="kpi-sub">14-category legal taxonomy</span>
             </StaggerItem>
             <StaggerItem className="kpi-card">
               <span className="kpi-label">Grounded Q&amp;A Queries</span>
-              <span className="kpi-value">{qa.groundedCount || 0}<small className="kpi-unit">/{qa.totalQuestions || 0}</small></span>
+              <span className="kpi-value">
+                <AnimatedNumber value={qa.groundedCount || 0} /><small className="kpi-unit">/{qa.totalQuestions || 0}</small>
+              </span>
               <span className="kpi-sub">{qa.refusalCount || 0} hallucination refusals</span>
             </StaggerItem>
             <StaggerItem className="kpi-card">
               <span className="kpi-label">Reviewer Helpfulness</span>
-              <span className="kpi-value text-accent">{qa.helpfulnessRate != null ? `${qa.helpfulnessRate}%` : "—"}</span>
+              <span className="kpi-value">{qa.helpfulnessRate != null ? `${qa.helpfulnessRate}%` : "—"}</span>
               <span className="kpi-sub">{qa.feedbackUp || 0} helpful · {qa.feedbackDown || 0} flagged</span>
             </StaggerItem>
           </StaggerContainer>
@@ -122,12 +128,30 @@ export default function Analytics() {
               </div>
               <div className="donut-layout">
                 <svg className="donut-svg" viewBox="0 0 110 110" role="img" aria-label="Risk distribution donut chart">
-                  <circle cx="55" cy="55" r="42" fill="none" stroke="#e4e1d8" strokeWidth="14" />
+                  <circle cx="55" cy="55" r="42" fill="none" stroke="#e4e1d8" strokeWidth="13" />
                   {totalRisk > 0 && (
                     <>
-                      <circle cx="55" cy="55" r="42" fill="none" stroke="#079455" strokeWidth="14" strokeDasharray={`${lowArc} ${C}`} strokeDashoffset={0} transform="rotate(-90 55 55)" />
-                      <circle cx="55" cy="55" r="42" fill="none" stroke="#d97706" strokeWidth="14" strokeDasharray={`${medArc} ${C}`} strokeDashoffset={-lowArc} transform="rotate(-90 55 55)" />
-                      <circle cx="55" cy="55" r="42" fill="none" stroke="#d92d20" strokeWidth="14" strokeDasharray={`${highArc} ${C}`} strokeDashoffset={-(lowArc + medArc)} transform="rotate(-90 55 55)" />
+                      <motion.circle
+                        cx="55" cy="55" r="42" fill="none" stroke="#079455" strokeWidth="13"
+                        initial={{ strokeDasharray: `0 ${C}` }}
+                        animate={{ strokeDasharray: `${lowArc} ${C}` }}
+                        transition={{ duration: 0.55, ease: EASE_EDITORIAL }}
+                        strokeDashoffset={0} transform="rotate(-90 55 55)"
+                      />
+                      <motion.circle
+                        cx="55" cy="55" r="42" fill="none" stroke="#d97706" strokeWidth="13"
+                        initial={{ strokeDasharray: `0 ${C}` }}
+                        animate={{ strokeDasharray: `${medArc} ${C}` }}
+                        transition={{ duration: 0.55, delay: 0.08, ease: EASE_EDITORIAL }}
+                        strokeDashoffset={-lowArc} transform="rotate(-90 55 55)"
+                      />
+                      <motion.circle
+                        cx="55" cy="55" r="42" fill="none" stroke="#d92d20" strokeWidth="13"
+                        initial={{ strokeDasharray: `0 ${C}` }}
+                        animate={{ strokeDasharray: `${highArc} ${C}` }}
+                        transition={{ duration: 0.55, delay: 0.16, ease: EASE_EDITORIAL }}
+                        strokeDashoffset={-(lowArc + medArc)} transform="rotate(-90 55 55)"
+                      />
                     </>
                   )}
                   <text x="55" y="52" textAnchor="middle" className="donut-number">{portfolio.analyzedContracts}</text>
@@ -181,6 +205,37 @@ export default function Analytics() {
               )}
             </section>
           </div>
+
+          {obligations.length > 0 && (
+            <section className="surface-card analytics-card">
+              <div className="section-head-row">
+                <span className="section-eyebrow">Portfolio Obligations &amp; Deadlines Ledger</span>
+                <span className="mono-caption">{obligations.length} tracked across workspace</span>
+              </div>
+              <div className="obligations-table-wrap">
+                <table className="obligations-table">
+                  <thead>
+                    <tr>
+                      <th>Contract</th>
+                      <th>Party</th>
+                      <th>Obligation</th>
+                      <th>Deadline</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {obligations.map((ob, idx) => (
+                      <tr key={idx}>
+                        <td className="obligation-party">{ob.contractTitle}</td>
+                        <td>{ob.party}</td>
+                        <td>{ob.obligation}</td>
+                        <td className="obligation-deadline">{ob.deadline}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
 
           <div className="analytics-grid">
             <section className="surface-card analytics-card">

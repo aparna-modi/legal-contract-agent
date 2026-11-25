@@ -4,12 +4,12 @@ import { contractsApi, feedbackApi, playbookApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import FormattedText from "./FormattedText";
 import {
-  AlertTriangleIcon, CheckCircleIcon, CheckIcon, CopyIcon, DownloadIcon,
-  FileTextIcon, MessageIcon, PrinterIcon, RefreshIcon, SearchIcon, SendIcon,
-  ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, ThumbsDownIcon, ThumbsUpIcon, XIcon,
+  AlertTriangleIcon, BookOpenIcon, CheckCircleIcon, CheckIcon, CopyIcon, DownloadIcon,
+  FileTextIcon, MessageIcon, PenToolIcon, PrinterIcon, RefreshIcon, ScaleIcon, SearchIcon,
+  SendIcon, ShieldAlertIcon, ShieldCheckIcon, SlidersIcon, ThumbsDownIcon, ThumbsUpIcon, XIcon,
 } from "./Icons";
-import { FadePanel } from "./Motion";
-import { EASE_EDITORIAL, SPRING_SNAPPY } from "./motionTokens";
+import { ExpandableSection, FadePanel } from "./Motion";
+import { EASE_EDITORIAL, SPRING_DRAWER, SPRING_SNAPPY } from "./motionTokens";
 
 const SAMPLE_QUESTIONS = [
   "Who are the parties and what are their roles?",
@@ -17,6 +17,20 @@ const SAMPLE_QUESTIONS = [
   "What happens if either party terminates or defaults?",
   "Which Indian laws, courts, or arbitration rules apply?",
   "Summarize the main obligations and risks in this contract.",
+];
+
+const STANCE_OPTIONS = [
+  { id: "balanced", label: "Balanced" },
+  { id: "client_favorable", label: "Client-Favorable" },
+  { id: "vendor_favorable", label: "Vendor-Favorable" },
+];
+
+const PLAYBOOK_PRESETS = [
+  { id: "", label: "My Active Firm Playbook" },
+  { id: "india_commercial", label: "India Commercial (Contract Act)" },
+  { id: "us_commercial", label: "US Commercial & SaaS" },
+  { id: "uk_eu_gdpr", label: "UK & EU Commercial / GDPR" },
+  { id: "freelance_contractor", label: "Freelancer & Contractor" },
 ];
 
 const esc = (v) =>
@@ -27,9 +41,43 @@ function parsePage(cite = "") {
   return m ? Number(m[1]) : 1;
 }
 
+function inlineWordDiff(original = "", revised = "") {
+  const a = String(original).trim().split(/(\s+)/);
+  const b = String(revised).trim().split(/(\s+)/);
+  if (a.length > 260 || b.length > 260) {
+    return null;
+  }
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      out.push({ text: a[i], type: "same" });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ text: a[i++], type: "del" });
+    } else {
+      out.push({ text: b[j++], type: "add" });
+    }
+  }
+  while (i < m) out.push({ text: a[i++], type: "del" });
+  while (j < n) out.push({ text: b[j++], type: "add" });
+  return out;
+}
+
 function printReport(contract, clauses) {
   const f = contract.keyFacts || {};
   const r = contract.riskSummary || { high: 0, medium: 0, low: 0, overallLevel: "low", score: 0 };
+  const nb = contract.negotiationBrief || {};
   const missing = contract.missingClauses || [];
   const obligations = f.obligationsAndDeadlines || [];
   const win = window.open("", "_blank", "width=920,height=780");
@@ -37,17 +85,18 @@ function printReport(contract, clauses) {
 
   win.document.open();
   win.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>${esc(contract.title || contract.fileName)}</title>
-  <style>body{font-family:system-ui,sans-serif;color:#111827;max-width:820px;margin:32px auto;padding:0 24px;line-height:1.55}
-  h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#4b5563;border-bottom:1px solid #e5e7eb;padding-bottom:6px;margin-top:24px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px}.box{border:1px solid #e5e7eb;padding:8px 12px;border-radius:6px}
-  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}th,td{border:1px solid #e5e7eb;padding:7px 10px;text-align:left}th{background:#f7f6f2}
-  .clause{border:1px solid #e4e1d8;border-left:3px solid #0f6e65;padding:10px 14px;margin:10px 0;page-break-inside:avoid}
-  .clause.high{border-left-color:#d92d20}.clause.medium{border-left-color:#d97706}.quote{white-space:pre-wrap;font-size:13px}
+  <style>body{font-family:system-ui,sans-serif;color:#14181f;max-width:820px;margin:32px auto;padding:0 24px;line-height:1.55}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#4a5260;border-bottom:1px solid #e4e1d8;padding-bottom:6px;margin-top:24px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px}.box{border:1px solid #e4e1d8;padding:8px 12px;border-radius:6px;background:#faf9f5}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}th,td{border:1px solid #e4e1d8;padding:7px 10px;text-align:left}th{background:#f7f6f2}
+  .clause{border:1px solid #e4e1d8;border-left:3px solid #182230;padding:10px 14px;margin:10px 0;page-break-inside:avoid}
+  .clause.high{border-left-color:#d92d20}.clause.medium{border-left-color:#d97706}.clause.low{border-left-color:#079455}.quote{white-space:pre-wrap;font-size:13px}
   .disclaimer{background:#f7f6f2;border:1px solid #e4e1d8;border-radius:6px;padding:8px 12px;font-size:12px;color:#4a5260;margin:12px 0}</style></head><body>
   <h1>${esc(contract.title || contract.fileName)}</h1>
   <p style="font-size:13px;color:#4a5260">${esc(contract.fileName)} · Risk: <b>${esc((r.overallLevel || "low").toUpperCase())} (${r.score || 0}/100)</b> · ${clauses.length} clauses</p>
   <p class="disclaimer"><b>Disclaimer:</b> Generated by an AI-assisted contract review tool for informational first-pass review only. This report is not legal advice and does not create an attorney-client relationship.</p>
   <h2>Executive Summary</h2><p>${esc(contract.summary || "No summary generated.")}</p>
+  ${nb.verdict ? `<h2>Negotiation Brief</h2><p><b>Verdict:</b> ${esc(nb.verdict)} · <b>Posture:</b> ${esc(nb.counterpartyPosture || "Balanced")}</p>${nb.topDealBreakers?.length ? `<ul>${nb.topDealBreakers.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}` : ""}
   <h2>Key Facts</h2><div class="grid">
   <div class="box"><b>Parties:</b> ${esc((f.parties || []).join(", ") || "Not specified")}</div>
   <div class="box"><b>Effective Date:</b> ${esc(f.effectiveDate || "Not specified")}</div>
@@ -58,7 +107,7 @@ function printReport(contract, clauses) {
   ${obligations.length ? `<h2>Obligations &amp; Deadlines</h2><table><thead><tr><th>Party</th><th>Obligation</th><th>Deadline</th><th>Ref</th></tr></thead><tbody>${obligations.map((ob) => `<tr><td>${esc(ob.party)}</td><td>${esc(ob.obligation)}</td><td>${esc(ob.deadline)}</td><td>${esc(ob.sourceRef || "—")}</td></tr>`).join("")}</tbody></table>` : ""}
   ${missing.length ? `<h2>Missing Protections</h2><ul>${missing.map((m) => `<li><b>${esc(m.clauseType)}</b> (${esc((m.severity || "medium").toUpperCase())}): ${esc(m.reason)}</li>`).join("")}</ul>` : ""}
   <h2>Clauses (${clauses.length})</h2>
-  ${clauses.map((c) => `<div class="clause ${esc(c.riskLevel || "low")}"><b>${esc(c.clauseType)} — Page ${c.pageNumber || 1}, ${esc(c.sectionHeading || "General")} (${esc((c.riskLevel || "low").toUpperCase())})</b>${c.plainEnglish ? `<p style="font-size:13px;margin:6px 0"><b>Explanation:</b> ${esc(c.plainEnglish)}</p>` : ""}${c.indianLawRef ? `<p style="font-size:12px;color:#0f6e65;margin:4px 0"><b>Indian Law:</b> ${esc(c.indianLawRef)}</p>` : ""}${c.riskReason ? `<p style="font-size:12.5px;color:#4b5563">${esc(c.riskReason)}</p>` : ""}<p class="quote">${esc(c.text)}</p></div>`).join("")}
+  ${clauses.map((c) => `<div class="clause ${esc(c.riskLevel || "low")}"><b>${esc(c.clauseType)} — Page ${c.pageNumber || 1}, ${esc(c.sectionHeading || "General")} (${esc((c.riskLevel || "low").toUpperCase())})</b>${c.plainEnglish ? `<p style="font-size:13px;margin:6px 0"><b>Explanation:</b> ${esc(c.plainEnglish)}</p>` : ""}${c.indianLawRef ? `<p style="font-size:12px;color:#0f6e65;margin:4px 0"><b>Indian Law:</b> ${esc(c.indianLawRef)}</p>` : ""}${c.riskReason ? `<p style="font-size:12.5px;color:#4a5260">${esc(c.riskReason)}</p>` : ""}<p class="quote">${esc(c.text)}</p></div>`).join("")}
   </body></html>`);
   win.document.close();
   win.focus();
@@ -73,6 +122,7 @@ function historyItemToTurn(item) {
     answer: item.answer || "",
     citations: item.citations || [],
     indian_law_refs: item.indianLawRefs || [],
+    suggested_followups: [],
     confidence: item.confidence || "NONE",
     insufficient_information: Boolean(item.insufficientInformation),
     latencyMs: item.latencyMs || 0,
@@ -106,11 +156,24 @@ export default function ContractDrawer({
   const [clauseSearch, setClauseSearch] = useState("");
   const [copiedId, setCopiedId] = useState(null);
 
+  // Enhanced AI Redline Studio per clause
+  const [redlineOpenId, setRedlineOpenId] = useState(null);
+  const [redlineStance, setRedlineStance] = useState({});
+  const [redlineNote, setRedlineNote] = useState({});
+  const [redlineViewDiff, setRedlineViewDiff] = useState({});
   const [redlines, setRedlines] = useState({});
   const [redlineBusy, setRedlineBusy] = useState({});
+
+  // Missing-clause AI drafter
+  const [draftedMissing, setDraftedMissing] = useState({});
+  const [draftMissingBusy, setDraftMissingBusy] = useState({});
+
+  // Inline Playbook Compliance Audit
+  const [playbookPreset, setPlaybookPreset] = useState("");
   const [playbookEval, setPlaybookEval] = useState(null);
   const [playbookBusy, setPlaybookBusy] = useState(false);
 
+  // Document viewer state
   const [docPage, setDocPage] = useState(1);
   const [showAllPages, setShowAllPages] = useState(true);
   const [highlightText, setHighlightText] = useState("");
@@ -120,6 +183,7 @@ export default function ContractDrawer({
   const chatEndRef = useRef(null);
   const turnSeqRef = useRef(0);
 
+  // Multi-turn Q&A state
   const [qaQuery, setQaQuery] = useState("");
   const [qaLoading, setQaLoading] = useState(false);
   const [pendingQuery, setPendingQuery] = useState("");
@@ -144,7 +208,6 @@ export default function ContractDrawer({
         if (cancelled) return;
         setClauses(cData.clauses || []);
         const hist = hData.history || [];
-        // Show saved conversation oldest-to-newest like a real counsel chat thread.
         setChatTurns(hist.slice(0, 12).reverse().map(historyItemToTurn));
         const map = {};
         hist.forEach((h) => { if (h.feedback?.rating) map[h._id] = h.feedback.rating; });
@@ -233,6 +296,7 @@ export default function ContractDrawer({
 
   const totalPages = Math.max(1, contract.pageCount || clausesByPage.length || 1);
   const facts = contract.keyFacts || {};
+  const brief = contract.negotiationBrief || {};
   const obligationsAndDeadlines = Array.isArray(facts.obligationsAndDeadlines)
     ? facts.obligationsAndDeadlines
     : [];
@@ -303,11 +367,18 @@ export default function ContractDrawer({
     }
   };
 
-  const suggestRedline = async (clause) => {
+  const runRedline = async (clause, stanceOverride) => {
     if (!clause?._id || redlineBusy[clause._id]) return;
+    const chosenStance = stanceOverride || redlineStance[clause._id] || "balanced";
+    const instruction = (redlineNote[clause._id] || "").trim();
+    setRedlineOpenId(clause._id);
+    setRedlineStance((p) => ({ ...p, [clause._id]: chosenStance }));
     setRedlineBusy((p) => ({ ...p, [clause._id]: true }));
     try {
-      const data = await contractsApi.suggestRedline(token, contract._id, clause._id);
+      const data = await contractsApi.suggestRedline(token, contract._id, clause._id, {
+        stance: chosenStance,
+        customInstruction: instruction,
+      });
       setRedlines((p) => ({ ...p, [clause._id]: data }));
     } catch (err) {
       setError(err.message);
@@ -316,10 +387,34 @@ export default function ContractDrawer({
     }
   };
 
-  const checkPlaybook = async () => {
-    setPlaybookBusy(true);
+  const handleDraftMissingClause = async (item) => {
+    const key = item.clauseType;
+    if (!key || draftMissingBusy[key]) return;
+    setDraftMissingBusy((p) => ({ ...p, [key]: true }));
+    setError(null);
     try {
-      setPlaybookEval(await playbookApi.evaluate(token, contract._id));
+      const data = await contractsApi.draftMissingClause(token, contract._id, {
+        clauseType: item.clauseType,
+        reason: item.reason,
+      });
+      setDraftedMissing((p) => ({ ...p, [key]: data }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDraftMissingBusy((p) => ({ ...p, [key]: false }));
+    }
+  };
+
+  const runPlaybookAudit = async (presetOverride) => {
+    const targetPreset = presetOverride !== undefined ? presetOverride : playbookPreset;
+    setPlaybookBusy(true);
+    setError(null);
+    try {
+      const res = await playbookApi.evaluate(token, contract._id, {
+        presetId: targetPreset || undefined,
+        useAiAudit: true,
+      });
+      setPlaybookEval(res);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -351,6 +446,7 @@ export default function ContractDrawer({
         message: data.message || "",
         citations: data.citations || [],
         indian_law_refs: data.indian_law_refs || [],
+        suggested_followups: data.suggested_followups || [],
         confidence: data.confidence || "NONE",
         insufficient_information: Boolean(data.insufficient_information),
         latencyMs: data.latencyMs || 0,
@@ -401,6 +497,13 @@ export default function ContractDrawer({
     ? clausesByPage
     : clausesByPage.filter(([p]) => p === docPage);
 
+  const verdictTone =
+    /high/i.test(brief.verdict || "") || overall === "high"
+      ? "high"
+      : /negotiate/i.test(brief.verdict || "") || overall === "medium"
+        ? "medium"
+        : "low";
+
   return (
     <motion.div
       className="drawer-backdrop"
@@ -415,10 +518,10 @@ export default function ContractDrawer({
         role="dialog"
         aria-modal="true"
         aria-label={`Inspect ${contract.title}`}
-        initial={{ x: 48, opacity: 0.6 }}
+        initial={{ x: 56, opacity: 0.5 }}
         animate={{ x: 0, opacity: 1 }}
-        exit={{ x: 48, opacity: 0 }}
-        transition={{ duration: 0.28, ease: EASE_EDITORIAL }}
+        exit={{ x: 56, opacity: 0 }}
+        transition={SPRING_DRAWER}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="drawer-header">
@@ -451,15 +554,15 @@ export default function ContractDrawer({
               className="btn btn-secondary btn-sm"
               onClick={handleReanalyze}
               disabled={reanalyzing}
-              title="Re-extract clauses, risk scores, and vector index"
+              title="Re-extract clauses, risk scores, negotiation brief, and vectors"
             >
               <RefreshIcon size={14} /> {reanalyzing ? "Analyzing..." : "Re-analyze"}
             </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => printReport(contract, clauses)}>
-              <PrinterIcon size={15} /> PDF
+              <PrinterIcon size={14} /> PDF
             </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={exportMd} disabled={exporting}>
-              <DownloadIcon size={15} /> {exporting ? "..." : ".md"}
+              <DownloadIcon size={14} /> {exporting ? "..." : ".md"}
             </button>
             <button type="button" className="icon-btn" onClick={onClose} aria-label="Close panel">
               <XIcon size={18} />
@@ -469,10 +572,11 @@ export default function ContractDrawer({
 
         <div className="drawer-tabs" role="tablist">
           {[
-            { id: "overview", label: "Overview", icon: <FileTextIcon size={15} /> },
-            { id: "clauses", label: "Clauses & Risks", icon: <ShieldAlertIcon size={15} />, count: clauses.length },
-            { id: "document", label: "Document", icon: <FileTextIcon size={15} /> },
-            { id: "qa", label: "Ask Contract", icon: <MessageIcon size={15} />, count: chatTurns.length || null },
+            { id: "overview", label: "Overview", icon: <FileTextIcon size={14} /> },
+            { id: "clauses", label: "Clauses & Risks", icon: <ShieldAlertIcon size={14} />, count: clauses.length },
+            { id: "document", label: "Document", icon: <BookOpenIcon size={14} /> },
+            { id: "qa", label: "Ask Contract", icon: <MessageIcon size={14} />, count: chatTurns.length || null },
+            { id: "playbook", label: "Playbook", icon: <ShieldCheckIcon size={14} /> },
           ].map((t) => (
             <button
               key={t.id}
@@ -504,30 +608,46 @@ export default function ContractDrawer({
                 <section className="panel-section">
                   <div className="section-head-row">
                     <span className="section-eyebrow">Executive Summary</span>
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={checkPlaybook} disabled={playbookBusy}>
-                      <ShieldCheckIcon size={14} /> {playbookBusy ? "Checking..." : "Playbook Check"}
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => { setTab("playbook"); if (!playbookEval) runPlaybookAudit(); }}
+                    >
+                      <ShieldCheckIcon size={14} /> Run Playbook Audit
                     </button>
                   </div>
                   <p className="summary-prose">{contract.summary || "Click Re-analyze to generate an executive summary."}</p>
-                  {playbookEval && (
-                    <div className="playbook-mini-card">
-                      <div className="section-head-row">
-                        <strong>{playbookEval.playbookName}</strong>
-                        <span className={`risk-pill ${playbookEval.compliance_score >= 80 ? "risk-low" : playbookEval.compliance_score >= 50 ? "risk-medium" : "risk-high"}`}>
-                          {playbookEval.compliance_score}% COMPLIANT
-                        </span>
-                      </div>
-                      <span className="mono-caption">
-                        {playbookEval.summary?.passed} passed · {playbookEval.summary?.warned} warnings · {playbookEval.summary?.failed} failed
-                      </span>
-                      {(playbookEval.results || []).filter((r) => r.status !== "pass" && r.remediation).slice(0, 3).map((r) => (
-                        <div key={r.ruleId} className="remediation-note">
-                          <strong>{r.name}:</strong> {r.remediation}
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </section>
+
+                {(brief.verdict || brief.topDealBreakers?.length > 0 || brief.negotiationPriorities?.length > 0) && (
+                  <section className="panel-section">
+                    <div className="section-head-row">
+                      <span className="section-eyebrow"><ScaleIcon size={13} /> Executive Negotiation Brief</span>
+                      <div className="risk-jump-pills">
+                        {brief.counterpartyPosture && <span className="mono-tag">{brief.counterpartyPosture}</span>}
+                        {brief.verdict && <span className={`risk-pill risk-${verdictTone}`}>{brief.verdict}</span>}
+                      </div>
+                    </div>
+                    <div className="brief-two-col">
+                      {brief.topDealBreakers?.length > 0 && (
+                        <div className="brief-card">
+                          <span className="brief-card-label">Key Deal-Breakers</span>
+                          <ul className="clean-list">
+                            {brief.topDealBreakers.map((item, idx) => <li key={idx}>{item}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                      {brief.negotiationPriorities?.length > 0 && (
+                        <div className="brief-card">
+                          <span className="brief-card-label">Negotiation Priorities</span>
+                          <ul className="clean-list">
+                            {brief.negotiationPriorities.map((item, idx) => <li key={idx}>{item}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                )}
 
                 <section className="panel-section">
                   <div className="section-head-row">
@@ -546,9 +666,24 @@ export default function ContractDrawer({
                     </div>
                   </div>
                   <div className="risk-bar" role="img" aria-label="Clause risk breakdown">
-                    <div className="risk-bar-seg seg-high" style={{ width: `${(riskCounts.high / totalRisk) * 100}%` }} />
-                    <div className="risk-bar-seg seg-medium" style={{ width: `${(riskCounts.medium / totalRisk) * 100}%` }} />
-                    <div className="risk-bar-seg seg-low" style={{ width: `${(riskCounts.low / totalRisk) * 100}%` }} />
+                    <motion.div
+                      className="risk-bar-seg seg-high"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(riskCounts.high / totalRisk) * 100}%` }}
+                      transition={{ duration: 0.4, ease: EASE_EDITORIAL }}
+                    />
+                    <motion.div
+                      className="risk-bar-seg seg-medium"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(riskCounts.medium / totalRisk) * 100}%` }}
+                      transition={{ duration: 0.4, delay: 0.05, ease: EASE_EDITORIAL }}
+                    />
+                    <motion.div
+                      className="risk-bar-seg seg-low"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(riskCounts.low / totalRisk) * 100}%` }}
+                      transition={{ duration: 0.4, delay: 0.1, ease: EASE_EDITORIAL }}
+                    />
                   </div>
                 </section>
 
@@ -583,7 +718,19 @@ export default function ContractDrawer({
                               <td className="obligation-party">{ob.party || "Party"}</td>
                               <td>{ob.obligation}</td>
                               <td className="obligation-deadline">{ob.deadline || "Ongoing"}</td>
-                              <td className="mono-caption">{ob.sourceRef || "—"}</td>
+                              <td>
+                                {ob.sourceRef ? (
+                                  <button
+                                    type="button"
+                                    className="clause-location-link"
+                                    onClick={() => openDocumentAt(parsePage(ob.sourceRef), ob.obligation)}
+                                  >
+                                    {ob.sourceRef}
+                                  </button>
+                                ) : (
+                                  <span className="mono-caption">—</span>
+                                )}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -608,20 +755,64 @@ export default function ContractDrawer({
                       <span className="mono-caption">{missing.length} flagged</span>
                     </div>
                     <div className="missing-list">
-                      {missing.map((m, i) => (
-                        <div key={i} className="missing-item">
-                          <div className="missing-item-head">
-                            <span className="missing-item-title"><AlertTriangleIcon size={14} /> {m.clauseType}</span>
-                            <span className={`risk-pill risk-${m.severity || "medium"}`}>{(m.severity || "medium").toUpperCase()}</span>
+                      {missing.map((m, i) => {
+                        const drafted = draftedMissing[m.clauseType];
+                        const busy = Boolean(draftMissingBusy[m.clauseType]);
+                        return (
+                          <div key={i} className="missing-item">
+                            <div className="missing-item-head">
+                              <span className="missing-item-title">
+                                <AlertTriangleIcon size={14} /> {m.clauseType}
+                              </span>
+                              <div className="clause-head-right">
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => handleDraftMissingClause(m)}
+                                  disabled={busy}
+                                >
+                                  <PenToolIcon size={13} /> {busy ? "Drafting..." : drafted ? "Regenerate" : "Draft Clause"}
+                                </button>
+                                <span className={`risk-pill risk-${m.severity || "medium"}`}>
+                                  {(m.severity || "medium").toUpperCase()}
+                                </span>
+                              </div>
+                            </div>
+                            <p className="missing-item-reason">{m.reason}</p>
+
+                            <AnimatePresence>
+                              {drafted && (
+                                <ExpandableSection className="drafted-missing-box">
+                                  <div className="section-head-row">
+                                    <span className="section-eyebrow">Ready-to-Insert Clause · {drafted.clause_heading}</span>
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      onClick={() => copyText(`miss-${m.clauseType}`, `${drafted.clause_heading}\n\n${drafted.suggested_clause_text}`)}
+                                    >
+                                      {copiedId === `miss-${m.clauseType}` ? <><CheckIcon size={13} /> Copied</> : <><CopyIcon size={13} /> Copy</>}
+                                    </button>
+                                  </div>
+                                  <p className="redline-suggested-text">{drafted.suggested_clause_text}</p>
+                                  {drafted.placement_guidance && (
+                                    <p className="mono-caption">Placement: {drafted.placement_guidance}</p>
+                                  )}
+                                  {drafted.negotiation_rationale && (
+                                    <p className="muted-caption">{drafted.negotiation_rationale}</p>
+                                  )}
+                                </ExpandableSection>
+                              )}
+                            </AnimatePresence>
                           </div>
-                          <p className="missing-item-reason">{m.reason}</p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </section>
                 )}
 
-                <p className="legal-disclaimer">AI-assisted first-pass review for informational purposes only — not legal advice. Consult a qualified attorney before signing.</p>
+                <p className="legal-disclaimer">
+                  AI-assisted first-pass review for informational purposes only — not legal advice. Consult a qualified attorney before signing.
+                </p>
               </FadePanel>
             )}
 
@@ -629,8 +820,18 @@ export default function ContractDrawer({
               <FadePanel panelKey="clauses" className="drawer-stack">
                 <div className="clause-toolbar">
                   <div className="segmented-control">
-                    {[["all", `All (${clauses.length})`], ["high", `High (${riskCounts.high})`], ["medium", `Med (${riskCounts.medium})`], ["low", `Low (${riskCounts.low})`]].map(([k, label]) => (
-                      <button key={k} type="button" className={`seg-btn ${riskFilter === k ? "active" : ""}`} onClick={() => setRiskFilter(k)}>
+                    {[
+                      ["all", `All (${clauses.length})`],
+                      ["high", `High (${riskCounts.high})`],
+                      ["medium", `Med (${riskCounts.medium})`],
+                      ["low", `Low (${riskCounts.low})`],
+                    ].map(([k, label]) => (
+                      <button
+                        key={k}
+                        type="button"
+                        className={`seg-btn ${riskFilter === k ? "active" : ""}`}
+                        onClick={() => setRiskFilter(k)}
+                      >
                         {label}
                       </button>
                     ))}
@@ -653,29 +854,47 @@ export default function ContractDrawer({
                   <div className="clause-list">
                     {filteredClauses.map((clause, i) => {
                       const lvl = (clause.riskLevel || "low").toLowerCase();
-                      const rl = redlines[clause._id];
+                      const cid = clause._id || String(i);
+                      const rl = redlines[cid];
+                      const studioOpen = redlineOpenId === cid || Boolean(rl);
+                      const curStance = redlineStance[cid] || "balanced";
+                      const showDiff = redlineViewDiff[cid] !== false;
+                      const diffSegs = rl && showDiff ? inlineWordDiff(clause.text, rl.suggested_text) : null;
+
                       return (
-                        <article key={clause._id || i} className={`clause-item border-risk-${lvl}`}>
+                        <article key={cid} className={`clause-item border-risk-${lvl}`}>
                           <div className="clause-item-head">
                             <div className="clause-title-wrap">
                               <span className="clause-category">{clause.clauseType}</span>
-                              <button type="button" className="clause-location-link" onClick={() => openDocumentAt(clause.pageNumber || 1, clause.text)}>
+                              <button
+                                type="button"
+                                className="clause-location-link"
+                                onClick={() => openDocumentAt(clause.pageNumber || 1, clause.text)}
+                              >
                                 Page {clause.pageNumber || 1} · {clause.sectionHeading || "General"} →
                               </button>
                             </div>
                             <div className="clause-head-right">
-                              {(lvl === "high" || lvl === "medium") && (
-                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => suggestRedline(clause)} disabled={Boolean(redlineBusy[clause._id])}>
-                                  <SparklesIcon size={13} /> {redlineBusy[clause._id] ? "Drafting..." : "Suggest Redline"}
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => {
+                                  if (studioOpen && !rl) setRedlineOpenId(null);
+                                  else if (!rl) runRedline(clause, curStance);
+                                  else setRedlineOpenId((curr) => (curr === cid ? null : cid));
+                                }}
+                                disabled={Boolean(redlineBusy[cid])}
+                              >
+                                <SlidersIcon size={13} />
+                                {redlineBusy[cid] ? "Drafting..." : rl ? "Redline Studio" : "Redline"}
+                              </button>
                               <button
                                 type="button"
                                 className="icon-btn"
-                                onClick={() => copyText(clause._id, `[${clause.clauseType} — Page ${clause.pageNumber || 1}]\n${clause.text}`)}
+                                onClick={() => copyText(cid, `[${clause.clauseType} — Page ${clause.pageNumber || 1}]\n${clause.text}`)}
                                 aria-label="Copy clause"
                               >
-                                {copiedId === clause._id ? <CheckIcon size={14} className="text-accent" /> : <CopyIcon size={14} />}
+                                {copiedId === cid ? <CheckIcon size={14} className="text-accent" /> : <CopyIcon size={14} />}
                               </button>
                               <span className={`risk-pill risk-${lvl}`}>{lvl.toUpperCase()}</span>
                             </div>
@@ -683,7 +902,7 @@ export default function ContractDrawer({
 
                           {clause.plainEnglish && (
                             <div className="clause-explanation-box">
-                              <span className="section-eyebrow text-accent">What this clause means</span>
+                              <span className="section-eyebrow">Plain-English Summary</span>
                               <p className="clause-explanation-text">{clause.plainEnglish}</p>
                             </div>
                           )}
@@ -702,27 +921,123 @@ export default function ContractDrawer({
                             <p className="clause-quote">{clause.text}</p>
                           </details>
 
-                          {rl && (
-                            <div className="redline-suggestion-box">
-                              <div className="section-head-row">
-                                <span className="section-eyebrow text-accent"><SparklesIcon size={13} /> Fallback Redline</span>
-                                <button type="button" className="btn btn-ghost btn-sm" onClick={() => copyText(`rl-${clause._id}`, rl.suggested_text)}>
-                                  {copiedId === `rl-${clause._id}` ? <><CheckIcon size={13} /> Copied</> : <><CopyIcon size={13} /> Copy</>}
-                                </button>
-                              </div>
-                              <p className="redline-suggested-text">{rl.suggested_text}</p>
-                              {rl.rationale && <p className="muted-caption">{rl.rationale}</p>}
-                              {rl.talking_points?.length > 0 && (
-                                <ul className="clean-list">{rl.talking_points.map((pt, j) => <li key={j}>{pt}</li>)}</ul>
-                              )}
-                            </div>
-                          )}
+                          <AnimatePresence>
+                            {studioOpen && (
+                              <ExpandableSection className="redline-studio-box">
+                                <div className="redline-controls">
+                                  <div className="segmented-control">
+                                    {STANCE_OPTIONS.map((opt) => (
+                                      <button
+                                        key={opt.id}
+                                        type="button"
+                                        className={`seg-btn ${curStance === opt.id ? "active" : ""}`}
+                                        disabled={Boolean(redlineBusy[cid])}
+                                        onClick={() => runRedline(clause, opt.id)}
+                                      >
+                                        {opt.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <div className="redline-directive-row">
+                                    <input
+                                      type="text"
+                                      className="text-input input-sm"
+                                      placeholder="Optional instruction (e.g., 'Cap at 6 months fees' or 'Add 30-day cure')"
+                                      value={redlineNote[cid] || ""}
+                                      onChange={(e) => setRedlineNote((p) => ({ ...p, [cid]: e.target.value }))}
+                                      disabled={Boolean(redlineBusy[cid])}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary btn-sm"
+                                      onClick={() => runRedline(clause, curStance)}
+                                      disabled={Boolean(redlineBusy[cid])}
+                                    >
+                                      {redlineBusy[cid] ? "Drafting..." : "Regenerate"}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {rl && (
+                                  <div className="redline-result-body">
+                                    <div className="section-head-row">
+                                      <span className="section-eyebrow">
+                                        Proposed Redline ({(rl.stance || curStance).replace("_", " ")})
+                                      </span>
+                                      <div className="clause-head-right">
+                                        {inlineWordDiff(clause.text, rl.suggested_text) && (
+                                          <button
+                                            type="button"
+                                            className="btn btn-ghost btn-sm"
+                                            onClick={() => setRedlineViewDiff((p) => ({ ...p, [cid]: !showDiff }))}
+                                          >
+                                            {showDiff ? "Clean Wording" : "Show Diff"}
+                                          </button>
+                                        )}
+                                        <button
+                                          type="button"
+                                          className="btn btn-ghost btn-sm"
+                                          onClick={() => copyText(`rl-${cid}`, rl.suggested_text)}
+                                        >
+                                          {copiedId === `rl-${cid}` ? <><CheckIcon size={13} /> Copied</> : <><CopyIcon size={13} /> Copy</>}
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {rl.risk_reduction_summary && (
+                                      <div className="risk-reduction-line">{rl.risk_reduction_summary}</div>
+                                    )}
+
+                                    <div className="redline-suggested-text">
+                                      {diffSegs ? (
+                                        <p className="redline-prose">
+                                          {diffSegs.map((s, idx) =>
+                                            s.type === "del" ? <del key={idx} className="diff-del">{s.text}</del>
+                                            : s.type === "add" ? <ins key={idx} className="diff-add">{s.text}</ins>
+                                            : <span key={idx}>{s.text}</span>
+                                          )}
+                                        </p>
+                                      ) : (
+                                        <p>{rl.suggested_text}</p>
+                                      )}
+                                    </div>
+
+                                    {rl.rationale && <p className="muted-caption">{rl.rationale}</p>}
+
+                                    {rl.fallback_compromise && (
+                                      <div className="tier2-box">
+                                        <div className="section-head-row">
+                                          <span className="mono-caption">Tier-2 Compromise (if counterparty pushes back)</span>
+                                          <button
+                                            type="button"
+                                            className="btn btn-ghost btn-sm"
+                                            onClick={() => copyText(`rl2-${cid}`, rl.fallback_compromise)}
+                                          >
+                                            {copiedId === `rl2-${cid}` ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                                          </button>
+                                        </div>
+                                        <p>{rl.fallback_compromise}</p>
+                                      </div>
+                                    )}
+
+                                    {rl.talking_points?.length > 0 && (
+                                      <ul className="clean-list">
+                                        {rl.talking_points.map((pt, j) => <li key={j}>{pt}</li>)}
+                                      </ul>
+                                    )}
+                                  </div>
+                                )}
+                              </ExpandableSection>
+                            )}
+                          </AnimatePresence>
                         </article>
                       );
                     })}
                   </div>
                 )}
-                <p className="legal-disclaimer">Clause risk labels, plain-English explanations, and fallback redlines are AI-assisted suggestions and do not constitute legal advice.</p>
+                <p className="legal-disclaimer">
+                  Clause risk labels, plain-English explanations, and fallback redlines are AI-assisted suggestions and do not constitute legal advice.
+                </p>
               </FadePanel>
             )}
 
@@ -741,12 +1056,7 @@ export default function ContractDrawer({
                         Open PDF
                       </a>
                     )}
-                    <button
-                      type="button"
-                      className="seg-btn"
-                      disabled={docPage <= 1}
-                      onClick={() => jumpToPage(docPage - 1)}
-                    >
+                    <button type="button" className="seg-btn" disabled={docPage <= 1} onClick={() => jumpToPage(docPage - 1)}>
                       Prev
                     </button>
                     {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => i + 1).map((p) => (
@@ -754,12 +1064,7 @@ export default function ContractDrawer({
                         P{p}
                       </button>
                     ))}
-                    <button
-                      type="button"
-                      className="seg-btn"
-                      disabled={docPage >= totalPages}
-                      onClick={() => jumpToPage(docPage + 1)}
-                    >
+                    <button type="button" className="seg-btn" disabled={docPage >= totalPages} onClick={() => jumpToPage(docPage + 1)}>
                       Next
                     </button>
                   </div>
@@ -828,7 +1133,7 @@ export default function ContractDrawer({
             {tab === "qa" && (
               <FadePanel panelKey="qa" className="chat-workspace">
                 <p className="legal-disclaimer">
-                  Multi-turn Q&amp;A grounded strictly in your uploaded contract (retains up to 6 prior turns of context). Informational review only — not legal advice.
+                  Multi-turn Q&amp;A grounded strictly in your uploaded contract (retains up to 6 prior turns). Informational review only — not legal advice.
                 </p>
 
                 <div className="chat-thread">
@@ -836,7 +1141,7 @@ export default function ContractDrawer({
                     <div className="chat-empty-state">
                       <h3>Ask this contract anything</h3>
                       <p>
-                        Every answer cites exact page numbers and quotes the contract verbatim. If a detail isn&apos;t in the document, the assistant will say so explicitly instead of guessing.
+                        Every answer cites exact page numbers and quotes the document verbatim. If a topic is missing from the contract, the assistant says so explicitly rather than guessing.
                       </p>
                       <div className="prompt-chips">
                         {SAMPLE_QUESTIONS.map((q) => (
@@ -845,110 +1150,132 @@ export default function ContractDrawer({
                       </div>
                     </div>
                   ) : (
-                    chatTurns.map((turn) => (
-                      <motion.div
-                        key={turn.id}
-                        className="chat-turn"
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.24, ease: EASE_EDITORIAL }}
-                      >
-                        <div className="chat-bubble-user">{turn.query}</div>
+                    chatTurns.map((turn, turnIdx) => {
+                      const isLatest = turnIdx === chatTurns.length - 1;
+                      return (
+                        <motion.div
+                          key={turn.id}
+                          className="chat-turn"
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.24, ease: EASE_EDITORIAL }}
+                        >
+                          <div className="chat-bubble-user">{turn.query}</div>
 
-                        {turn.insufficient_information ? (
-                          <div className="chat-bubble-ai is-refusal">
-                            <div className="qa-refusal-head">
-                              <AlertTriangleIcon size={16} />
-                              <strong>Not specified in this contract</strong>
-                            </div>
-                            <FormattedText text={turn.answer || turn.message} className="qa-refusal-body" />
-                          </div>
-                        ) : (
-                          <div className="chat-bubble-ai">
-                            <div className="qa-answer-top">
-                              <span className="qa-answer-label">
-                                <CheckCircleIcon size={15} /> Grounded Answer
-                              </span>
-                              <div className="qa-answer-badges">
-                                {turn.latencyMs > 0 && <span className="mono-caption">{(turn.latencyMs / 1000).toFixed(1)}s</span>}
-                                {turn.confidence && turn.confidence !== "NONE" && (
-                                  <span className={`confidence-pill conf-${turn.confidence.toLowerCase()}`}>{turn.confidence}</span>
-                                )}
-                                <button
-                                  type="button"
-                                  className="icon-btn"
-                                  onClick={() => copyText(turn.id, turn.answer)}
-                                  aria-label="Copy answer"
-                                >
-                                  {copiedId === turn.id ? <CheckIcon size={13} className="text-accent" /> : <CopyIcon size={13} />}
-                                </button>
+                          {turn.insufficient_information ? (
+                            <div className="chat-bubble-ai is-refusal">
+                              <div className="qa-refusal-head">
+                                <AlertTriangleIcon size={15} />
+                                <strong>Not specified in this contract</strong>
                               </div>
+                              <FormattedText text={turn.answer || turn.message} className="qa-refusal-body" />
                             </div>
-
-                            <FormattedText text={turn.answer} />
-
-                            {turn.indian_law_refs?.length > 0 && (
-                              <div className="law-ref-stack">
-                                <span className="law-ref-badge">Applicable Indian Law</span>
-                                <div className="citation-row">
-                                  {turn.indian_law_refs.map((law, i) => (
-                                    <span key={i} className="law-ref-pill">{law}</span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            {turn.citations?.length > 0 && (
-                              <div className="citation-row">
-                                {turn.citations.map((cite, i) => (
+                          ) : (
+                            <div className="chat-bubble-ai">
+                              <div className="qa-answer-top">
+                                <span className="qa-answer-label">
+                                  <CheckCircleIcon size={14} /> Grounded Answer
+                                </span>
+                                <div className="qa-answer-badges">
+                                  {turn.latencyMs > 0 && <span className="mono-caption">{(turn.latencyMs / 1000).toFixed(1)}s</span>}
+                                  {turn.confidence && turn.confidence !== "NONE" && (
+                                    <span className={`confidence-pill conf-${turn.confidence.toLowerCase()}`}>{turn.confidence}</span>
+                                  )}
                                   <button
-                                    key={i}
                                     type="button"
-                                    className="citation-tag clickable-citation"
-                                    onClick={() => openDocumentAt(parsePage(cite), turn.results?.[i]?.text || "")}
+                                    className="icon-btn"
+                                    onClick={() => copyText(turn.id, turn.answer)}
+                                    aria-label="Copy answer"
                                   >
-                                    {cite}
+                                    {copiedId === turn.id ? <CheckIcon size={13} className="text-accent" /> : <CopyIcon size={13} />}
                                   </button>
-                                ))}
+                                </div>
                               </div>
-                            )}
 
-                            {turn.results?.length > 0 && (
-                              <details className="evidence-details">
-                                <summary>Supporting contract passages ({turn.results.length})</summary>
-                                <div className="evidence-list">
-                                  {turn.results.map((item, i) => (
-                                    <div key={item.chunk_id || i} className="evidence-card">
-                                      <div className="evidence-meta">
-                                        <button type="button" className="clause-location-link" onClick={() => openDocumentAt(item.page_number || 1, item.text)}>
-                                          {item.citation || `Page ${item.page_number}, ${item.section}`} →
-                                        </button>
-                                        <span className="mono-caption">{Math.round((item.score || 0) * 100)}% relevance</span>
-                                      </div>
-                                      <p className="evidence-text">{item.text}</p>
-                                    </div>
+                              <FormattedText text={turn.answer} />
+
+                              {turn.indian_law_refs?.length > 0 && (
+                                <div className="law-ref-stack">
+                                  <span className="law-ref-badge">Applicable Indian Law</span>
+                                  <div className="citation-row">
+                                    {turn.indian_law_refs.map((law, i) => (
+                                      <span key={i} className="law-ref-pill">{law}</span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {turn.citations?.length > 0 && (
+                                <div className="citation-row">
+                                  {turn.citations.map((cite, i) => (
+                                    <button
+                                      key={i}
+                                      type="button"
+                                      className="citation-tag clickable-citation"
+                                      onClick={() => openDocumentAt(parsePage(cite), turn.results?.[i]?.text || "")}
+                                    >
+                                      {cite}
+                                    </button>
                                   ))}
                                 </div>
-                              </details>
-                            )}
+                              )}
 
-                            {turn.qaId && (
-                              <div className="feedback-bar">
-                                <span className="feedback-prompt">Was this answer helpful?</span>
-                                <div className="feedback-btns">
-                                  <button type="button" className={`feedback-btn ${feedbackMap[turn.qaId] === "up" ? "active-up" : ""}`} onClick={() => rateAnswer(turn.qaId, "up")} disabled={feedbackBusy[turn.qaId]}>
-                                    <ThumbsUpIcon size={14} /> Helpful
-                                  </button>
-                                  <button type="button" className={`feedback-btn ${feedbackMap[turn.qaId] === "down" ? "active-down" : ""}`} onClick={() => rateAnswer(turn.qaId, "down")} disabled={feedbackBusy[turn.qaId]}>
-                                    <ThumbsDownIcon size={14} /> Needs review
-                                  </button>
+                              {turn.results?.length > 0 && (
+                                <details className="evidence-details">
+                                  <summary>Supporting contract passages ({turn.results.length})</summary>
+                                  <div className="evidence-list">
+                                    {turn.results.map((item, i) => (
+                                      <div key={item.chunk_id || i} className="evidence-card">
+                                        <div className="evidence-meta">
+                                          <button type="button" className="clause-location-link" onClick={() => openDocumentAt(item.page_number || 1, item.text)}>
+                                            {item.citation || `Page ${item.page_number}, ${item.section}`} →
+                                          </button>
+                                          <span className="mono-caption">{Math.round((item.score || 0) * 100)}% relevance</span>
+                                        </div>
+                                        <p className="evidence-text">{item.text}</p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </details>
+                              )}
+
+                              {isLatest && turn.suggested_followups?.length > 0 && (
+                                <div className="followup-row">
+                                  <span className="chip-prefix">Suggested follow-ups</span>
+                                  <div className="prompt-chips">
+                                    {turn.suggested_followups.map((fq, fIdx) => (
+                                      <button
+                                        key={fIdx}
+                                        type="button"
+                                        className="chip-btn"
+                                        onClick={() => askQuestion(fq)}
+                                        disabled={qaLoading}
+                                      >
+                                        {fq}
+                                      </button>
+                                    ))}
+                                  </div>
                                 </div>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </motion.div>
-                    ))
+                              )}
+
+                              {turn.qaId && (
+                                <div className="feedback-bar">
+                                  <span className="feedback-prompt">Was this answer helpful?</span>
+                                  <div className="feedback-btns">
+                                    <button type="button" className={`feedback-btn ${feedbackMap[turn.qaId] === "up" ? "active-up" : ""}`} onClick={() => rateAnswer(turn.qaId, "up")} disabled={feedbackBusy[turn.qaId]}>
+                                      <ThumbsUpIcon size={13} /> Helpful
+                                    </button>
+                                    <button type="button" className={`feedback-btn ${feedbackMap[turn.qaId] === "down" ? "active-down" : ""}`} onClick={() => rateAnswer(turn.qaId, "down")} disabled={feedbackBusy[turn.qaId]}>
+                                      <ThumbsDownIcon size={13} /> Needs review
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </motion.div>
+                      );
+                    })
                   )}
 
                   {qaLoading && (
@@ -966,13 +1293,6 @@ export default function ContractDrawer({
                 </div>
 
                 <div className="chat-composer-sticky">
-                  {chatTurns.length > 0 && (
-                    <div className="prompt-chips">
-                      {SAMPLE_QUESTIONS.slice(0, 3).map((q) => (
-                        <button key={q} type="button" className="chip-btn" onClick={() => askQuestion(q)} disabled={qaLoading}>{q}</button>
-                      ))}
-                    </div>
-                  )}
                   <form className="qa-form" onSubmit={(e) => { e.preventDefault(); askQuestion(); }}>
                     <input
                       type="text"
@@ -987,6 +1307,114 @@ export default function ContractDrawer({
                     </button>
                   </form>
                 </div>
+              </FadePanel>
+            )}
+
+            {tab === "playbook" && (
+              <FadePanel panelKey="playbook" className="drawer-stack">
+                <section className="panel-section">
+                  <div className="section-head-row">
+                    <div>
+                      <span className="section-eyebrow">Hybrid AI + Rule Playbook Compliance Audit</span>
+                      <p className="muted-caption">
+                        Audit this agreement against your active firm playbook or test against a jurisdiction standard pack.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="qa-form">
+                    <select
+                      className="select-input"
+                      value={playbookPreset}
+                      onChange={(e) => setPlaybookPreset(e.target.value)}
+                      disabled={playbookBusy}
+                      aria-label="Choose playbook to evaluate against"
+                    >
+                      {PLAYBOOK_PRESETS.map((p) => (
+                        <option key={p.id} value={p.id}>{p.label}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => runPlaybookAudit(playbookPreset)}
+                      disabled={playbookBusy}
+                    >
+                      <ShieldCheckIcon size={14} /> {playbookBusy ? "Auditing..." : "Run Audit"}
+                    </button>
+                  </div>
+                </section>
+
+                {playbookBusy ? (
+                  <div className="state-box">
+                    <div className="spinner" />
+                    <p>Running deterministic checks and semantic AI compliance audit...</p>
+                  </div>
+                ) : !playbookEval ? (
+                  <div className="chat-empty-state">
+                    <h3>Audit contract compliance</h3>
+                    <p>
+                      Select your firm playbook or a jurisdiction rule pack above and run an automated semantic compliance check to surface deviations and tailored remediation wording.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="drawer-stack">
+                    <div className="playbook-score-banner">
+                      <div>
+                        <span className="section-eyebrow">{playbookEval.playbookName}</span>
+                        <div className="playbook-score-counts">
+                          {playbookEval.summary?.passed || 0} passed · {playbookEval.summary?.warned || 0} warnings · {playbookEval.summary?.failed || 0} failed
+                          {playbookEval.provider && ` · ${playbookEval.provider}`}
+                        </div>
+                        {playbookEval.ai_audit_summary && (
+                          <p className="summary-prose" style={{ marginTop: 8 }}>{playbookEval.ai_audit_summary}</p>
+                        )}
+                      </div>
+                      <span
+                        className={`risk-pill ${
+                          playbookEval.compliance_score >= 80
+                            ? "risk-low"
+                            : playbookEval.compliance_score >= 50
+                              ? "risk-medium"
+                              : "risk-high"
+                        }`}
+                      >
+                        {playbookEval.compliance_score}% COMPLIANT
+                      </span>
+                    </div>
+
+                    <div className="session-list">
+                      {(playbookEval.results || []).map((r) => (
+                        <div key={r.ruleId} className="session-row">
+                          <div className="session-info">
+                            <div className="session-title-line">
+                              {r.status === "pass" ? (
+                                <CheckCircleIcon size={15} className="text-accent" />
+                              ) : (
+                                <AlertTriangleIcon size={15} className={r.status === "fail" ? "text-danger" : "text-warn"} />
+                              )}
+                              <strong>{r.name}</strong>
+                              {r.aiVerified && <span className="mono-tag">AI Verified</span>}
+                            </div>
+                            <span className="muted-caption">{r.detail}</span>
+                            {r.status !== "pass" && r.remediation && (
+                              <div className="remediation-note">
+                                <strong>Remediation:</strong> {r.remediation}
+                              </div>
+                            )}
+                          </div>
+                          <span className={`risk-pill ${r.status === "pass" ? "risk-low" : r.status === "warn" ? "risk-medium" : "risk-high"}`}>
+                            {r.status.toUpperCase()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <p className="legal-disclaimer">
+                      Automated playbook compliance checks flag potential deviations for human review — not legal advice.
+                    </p>
+                  </div>
+                )}
               </FadePanel>
             )}
           </AnimatePresence>

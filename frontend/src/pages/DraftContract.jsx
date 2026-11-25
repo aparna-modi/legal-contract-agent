@@ -1,55 +1,62 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { contractsApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import {
-  AlertTriangleIcon,
-  CheckCircleIcon,
-  CheckIcon,
-  CopyIcon,
-  DownloadIcon,
-  FileTextIcon,
-  PenToolIcon,
-  ShieldCheckIcon,
-  SparklesIcon,
+  AlertTriangleIcon, CheckCircleIcon, CheckIcon, CopyIcon, DownloadIcon,
+  FileTextIcon, PenToolIcon, PrinterIcon, SendIcon, ShieldCheckIcon,
 } from "../components/Icons";
-import { PageReveal } from "../components/Motion";
+import { ExpandableSection, PageReveal } from "../components/Motion";
 import { EASE_EDITORIAL, SPRING_SNAPPY } from "../components/motionTokens";
 
 const FALLBACK_TEMPLATES = [
   {
     id: "msa",
     label: "Master Services Agreement (MSA)",
-    description: "B2B services, SaaS, or consulting framework with SOWs, fees, IP ownership, liability cap, and termination.",
+    description: "B2B services framework with SOWs, fees, IP ownership, liability cap, and termination.",
     default_term: "12 months from Effective Date",
     default_notice: "30 days prior written notice",
   },
   {
     id: "nda",
     label: "Mutual Non-Disclosure Agreement (NDA)",
-    description: "Reciprocal confidentiality agreement protecting trade secrets, product roadmaps, and commercial terms.",
+    description: "Reciprocal confidentiality protecting trade secrets, product roadmaps, and negotiations.",
     default_term: "3 years from Effective Date",
     default_notice: "15 days prior written notice",
   },
   {
+    id: "saas",
+    label: "SaaS Subscription Agreement",
+    description: "Cloud software subscription covering uptime SLA, data security, billing, and exit export.",
+    default_term: "12 months (non-evergreen)",
+    default_notice: "30 days prior written notice",
+  },
+  {
+    id: "dpa",
+    label: "Data Processing Agreement (DPA)",
+    description: "DPDP Act & GDPR-aligned processor duties, breach notice windows, and deletion on exit.",
+    default_term: "Co-terminous with Master Agreement",
+    default_notice: "30 days prior written notice",
+  },
+  {
     id: "employment",
     label: "Employment Agreement",
-    description: "Full-time employment terms covering role, compensation, probation, IP assignment, confidentiality, and exit.",
-    default_term: "At-will / continuing until terminated",
+    description: "Full-time employment terms covering compensation, probation, IP, confidentiality, and exit.",
+    default_term: "Continuing until terminated",
     default_notice: "30 days prior written notice",
   },
   {
     id: "contractor",
     label: "Independent Contractor Agreement",
-    description: "Freelance or consulting contract with deliverables, milestone invoices, conditional IP transfer, and kill fee.",
+    description: "Freelance or consulting contract with milestones, conditional IP transfer, and kill fee.",
     default_term: "6 months or completion of deliverables",
     default_notice: "14 days prior written notice",
   },
   {
     id: "lease",
     label: "Commercial Lease Agreement",
-    description: "Premises lease covering rent, security deposit, maintenance responsibilities, lock-in period, and handover.",
+    description: "Premises lease covering rent, security deposit, maintenance, lock-in, and handover.",
     default_term: "24 months from Commencement Date",
     default_notice: "60 days prior written notice",
   },
@@ -62,6 +69,12 @@ const JURISDICTIONS = [
   "England and Wales, United Kingdom",
   "Republic of Singapore",
   "European Union / Germany",
+];
+
+const REVISION_SUGGESTIONS = [
+  "Cap aggregate liability at 6 months of fees with mutual consequential damages waiver",
+  "Add a 72-hour data breach notification obligation and data deletion on exit",
+  "Remove any automatic renewal and require written renewal confirmation",
 ];
 
 function formatDateToday() {
@@ -84,6 +97,24 @@ function downloadMarkdownFile(filename, content) {
   URL.revokeObjectURL(url);
 }
 
+function printManuscript(title, text) {
+  const esc = (v) => String(v || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const win = window.open("", "_blank", "width=880,height=780");
+  if (!win) return;
+  win.document.open();
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>${esc(title)}</title>
+  <style>body{font-family:Georgia,serif;color:#14181f;max-width:760px;margin:40px auto;padding:0 28px;line-height:1.7;font-size:13.5px}
+  h1{font-size:22px;border-bottom:1px solid #d1cdc1;padding-bottom:10px;margin-bottom:18px}
+  pre{font-family:Georgia,serif;white-space:pre-wrap;word-break:break-word;margin:0}
+  .note{font-family:system-ui,sans-serif;font-size:11.5px;color:#5c6473;border-top:1px solid #e4e1d8;margin-top:28px;padding-top:10px}</style></head>
+  <body><h1>${esc(title)}</h1><pre>${esc(text)}</pre>
+  <p class="note">AI-assisted contract draft generated for informational starting-point use only — not legal advice. Have qualified counsel review before signing.</p>
+  </body></html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 250);
+}
+
 export default function DraftContract() {
   const { token, user } = useAuth();
   const navigate = useNavigate();
@@ -103,6 +134,11 @@ export default function DraftContract() {
   });
 
   const [generating, setGenerating] = useState(false);
+  const [revising, setRevising] = useState(false);
+  const [revisionPrompt, setRevisionPrompt] = useState("");
+  const [revisionLog, setRevisionLog] = useState([]);
+  const [editMode, setEditMode] = useState(false);
+  const [placeholderValues, setPlaceholderValues] = useState({});
   const [saving, setSaving] = useState(false);
   const [shareTeam, setShareTeam] = useState(false);
   const [draft, setDraft] = useState(null);
@@ -119,13 +155,16 @@ export default function DraftContract() {
           setTemplates(res.templates);
         }
       })
-      .catch(() => {
-        // Keep local template defaults if the catalog lookup fails.
-      });
-    return () => {
-      active = false;
-    };
+      .catch(() => {});
+    return () => { active = false; };
   }, [token]);
+
+  const draftText = draft?.full_text || "";
+  const detectedPlaceholders = useMemo(() => {
+    if (!draftText) return [];
+    const matches = draftText.match(/\[[A-Za-z0-9\s/.,'()-]{2,48}\]/g) || [];
+    return Array.from(new Set(matches)).slice(0, 12);
+  }, [draftText]);
 
   const selectTemplate = (tpl) => {
     setSelectedType(tpl.id);
@@ -136,14 +175,14 @@ export default function DraftContract() {
     }));
   };
 
-  const updateField = (key, value) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
-  };
+  const updateField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
 
   const handleGenerate = async (e) => {
     e.preventDefault();
     setGenerating(true);
     setBanner(null);
+    setRevisionLog([]);
+    setPlaceholderValues({});
     try {
       const data = await contractsApi.draft(token, {
         contractType: selectedType,
@@ -158,10 +197,61 @@ export default function DraftContract() {
         specialInstructions: form.special_instructions,
       });
       setDraft(data);
+      setEditMode(false);
     } catch (err) {
       setBanner({ tone: "error", text: err.message });
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleRevise = async (instructionOverride) => {
+    const inst = (instructionOverride ?? revisionPrompt).trim();
+    if (!inst || !draft?.full_text || revising) return;
+    setRevising(true);
+    setBanner(null);
+    try {
+      const res = await contractsApi.reviseDraft(token, {
+        title: draft.title,
+        currentText: draft.full_text,
+        instruction: inst,
+        jurisdiction: draft.jurisdiction || form.jurisdiction,
+      });
+      setDraft((prev) => ({
+        ...prev,
+        title: res.title || prev.title,
+        full_text: res.full_text || prev.full_text,
+        sections_included: res.sections_included?.length ? res.sections_included : prev.sections_included,
+        negotiation_notes: res.negotiation_notes?.length ? res.negotiation_notes : prev.negotiation_notes,
+        placeholders_to_confirm: res.placeholders_to_confirm?.length ? res.placeholders_to_confirm : prev.placeholders_to_confirm,
+        provider: res.provider || prev.provider,
+      }));
+      if (res.changes_made?.length) {
+        setRevisionLog((prev) => [{ instruction: inst, changes: res.changes_made }, ...prev].slice(0, 4));
+      }
+      setRevisionPrompt("");
+    } catch (err) {
+      setBanner({ tone: "error", text: err.message });
+    } finally {
+      setRevising(false);
+    }
+  };
+
+  const applyPlaceholders = () => {
+    if (!draft?.full_text) return;
+    let updated = draft.full_text;
+    let count = 0;
+    Object.entries(placeholderValues).forEach(([tokenStr, replacement]) => {
+      const clean = replacement.trim();
+      if (clean) {
+        updated = updated.split(tokenStr).join(clean);
+        count += 1;
+      }
+    });
+    if (count > 0) {
+      setDraft((prev) => ({ ...prev, full_text: updated }));
+      setPlaceholderValues({});
+      setBanner({ tone: "success", text: `Applied ${count} placeholder value${count === 1 ? "" : "s"} across the manuscript.` });
     }
   };
 
@@ -171,9 +261,7 @@ export default function DraftContract() {
       await navigator.clipboard.writeText(draft.full_text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
-    } catch {
-      // Clipboard may be unavailable in restricted frames.
-    }
+    } catch { /* ignore */ }
   };
 
   const handleDownloadMd = () => {
@@ -224,9 +312,9 @@ export default function DraftContract() {
       <div className="page-header">
         <div>
           <span className="section-eyebrow"><PenToolIcon size={13} /> Contract Drafting Studio</span>
-          <h1 className="page-heading">Draft Balanced Agreements</h1>
+          <h1 className="page-heading">Draft &amp; Refine Commercial Agreements</h1>
           <p className="page-description">
-            Generate structured, section-numbered commercial drafts tailored to your jurisdiction, then save straight into your workspace for risk review.
+            Generate section-numbered drafts from 7 templates, refine clauses iteratively with natural-language instructions, fill placeholders inline, and analyze in one click.
           </p>
         </div>
       </div>
@@ -236,8 +324,8 @@ export default function DraftContract() {
       <div className="draft-studio-grid">
         <form onSubmit={handleGenerate} className="surface-card draft-config-panel">
           <div className="section-head-row">
-            <span className="section-eyebrow">1. Choose Agreement Template</span>
-            <span className="mono-caption">{templates.length} templates</span>
+            <span className="section-eyebrow">1. Agreement Template</span>
+            <span className="mono-caption">{templates.length} available</span>
           </div>
 
           <div className="template-grid" role="radiogroup" aria-label="Contract template">
@@ -254,11 +342,7 @@ export default function DraftContract() {
                   disabled={generating}
                 >
                   {selected && (
-                    <motion.span
-                      layoutId="draft-tpl-indicator"
-                      className="template-card-ring"
-                      transition={SPRING_SNAPPY}
-                    />
+                    <motion.span layoutId="draft-tpl-indicator" className="template-card-ring" transition={SPRING_SNAPPY} />
                   )}
                   <div className="template-card-head">
                     <strong>{tpl.label}</strong>
@@ -271,7 +355,7 @@ export default function DraftContract() {
           </div>
 
           <div className="draft-divider" />
-          <span className="section-eyebrow">2. Commercial Parameters</span>
+          <span className="section-eyebrow">2. Commercial Terms</span>
 
           <div className="field">
             <label htmlFor="draft-title" className="field-label">
@@ -289,7 +373,7 @@ export default function DraftContract() {
 
           <div className="draft-two-col">
             <div className="field">
-              <label htmlFor="draft-party-a" className="field-label">First Party (Client / Discloser)</label>
+              <label htmlFor="draft-party-a" className="field-label">First Party</label>
               <input
                 id="draft-party-a"
                 className="text-input"
@@ -300,13 +384,13 @@ export default function DraftContract() {
               />
             </div>
             <div className="field">
-              <label htmlFor="draft-party-b" className="field-label">Second Party (Vendor / Counterparty)</label>
+              <label htmlFor="draft-party-b" className="field-label">Second Party</label>
               <input
                 id="draft-party-b"
                 className="text-input"
                 value={form.party_b}
                 onChange={(e) => updateField("party_b", e.target.value)}
-                placeholder="e.g., Meridian Cloud Systems Inc."
+                placeholder="e.g., Meridian Systems Inc."
                 disabled={generating}
               />
             </div>
@@ -314,7 +398,7 @@ export default function DraftContract() {
 
           <div className="draft-two-col">
             <div className="field">
-              <label htmlFor="draft-jurisdiction" className="field-label">Governing Law / Jurisdiction</label>
+              <label htmlFor="draft-jurisdiction" className="field-label">Governing Law</label>
               <select
                 id="draft-jurisdiction"
                 className="select-input"
@@ -322,9 +406,7 @@ export default function DraftContract() {
                 onChange={(e) => updateField("jurisdiction", e.target.value)}
                 disabled={generating}
               >
-                {JURISDICTIONS.map((j) => (
-                  <option key={j} value={j}>{j}</option>
-                ))}
+                {JURISDICTIONS.map((j) => <option key={j} value={j}>{j}</option>)}
               </select>
             </div>
             <div className="field">
@@ -334,7 +416,6 @@ export default function DraftContract() {
                 className="text-input"
                 value={form.effective_date}
                 onChange={(e) => updateField("effective_date", e.target.value)}
-                placeholder="e.g., May 1, 2026"
                 disabled={generating}
               />
             </div>
@@ -352,7 +433,7 @@ export default function DraftContract() {
               />
             </div>
             <div className="field">
-              <label htmlFor="draft-notice" className="field-label">Termination Notice Period</label>
+              <label htmlFor="draft-notice" className="field-label">Termination Notice</label>
               <input
                 id="draft-notice"
                 className="text-input"
@@ -370,14 +451,13 @@ export default function DraftContract() {
               className="text-input"
               value={form.payment_terms}
               onChange={(e) => updateField("payment_terms", e.target.value)}
-              placeholder="e.g., INR 4,50,000 monthly retainer, Net-30 invoicing, 1% late fee cap"
               disabled={generating}
             />
           </div>
 
           <div className="field">
             <label htmlFor="draft-special" className="field-label">
-              Special Clauses or Negotiation Guardrails <span className="field-optional">(optional)</span>
+              Special Clauses or Guardrails <span className="field-optional">(optional)</span>
             </label>
             <textarea
               id="draft-special"
@@ -385,14 +465,14 @@ export default function DraftContract() {
               rows={3}
               value={form.special_instructions}
               onChange={(e) => updateField("special_instructions", e.target.value)}
-              placeholder="e.g., Mutual liability cap at 12 months fees, no auto-renewal, data residency in Mumbai, 30-day breach cure period..."
+              placeholder="e.g., Mutual liability cap at 12 months fees, no auto-renewal, Bengaluru arbitration seat..."
               disabled={generating}
             />
           </div>
 
           <div className="form-footer-row">
             <button type="submit" className="btn btn-primary btn-full" disabled={generating}>
-              <SparklesIcon size={15} /> {generating ? "Drafting structured agreement..." : "Generate Contract Draft"}
+              <PenToolIcon size={15} /> {generating ? "Drafting structured agreement..." : "Generate Contract Draft"}
             </button>
           </div>
         </form>
@@ -411,17 +491,17 @@ export default function DraftContract() {
               <span className="dropzone-icon-wrap"><FileTextIcon size={22} /></span>
               <h3>Your manuscript appears here</h3>
               <p>
-                Pick a template and fill in parties, jurisdiction, and payment terms. Every generated draft uses balanced mutual protections, flags bracketed fields to confirm, and can be saved directly into your Workspace for full clause risk triage and Q&amp;A.
+                Choose a template and enter commercial terms. Once generated, you can revise any clause via natural-language instructions, fill bracketed placeholders inline, or save directly into your workspace for full risk triage.
               </p>
               <div className="draft-empty-checklist">
-                <span><CheckCircleIcon size={14} /> Numbered sections &amp; signature blocks</span>
-                <span><CheckCircleIcon size={14} /> Commercial negotiation notes</span>
-                <span><CheckCircleIcon size={14} /> One-click save &amp; automated risk analysis</span>
+                <span><CheckCircleIcon size={14} /> 7 commercial templates with numbered sections</span>
+                <span><CheckCircleIcon size={14} /> Live AI clause revision &amp; placeholder quick-fill</span>
+                <span><CheckCircleIcon size={14} /> One-click Save &amp; Risk Analysis in Workspace</span>
               </div>
             </div>
           ) : (
             <motion.div
-              key={draft.title + draft.provider}
+              key={draft.title}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, ease: EASE_EDITORIAL }}
@@ -435,8 +515,15 @@ export default function DraftContract() {
                     {draft.provider && <span className="mono-caption">· {draft.provider}</span>}
                   </div>
                   <div className="paper-canvas-actions">
+                    <div className="segmented-control">
+                      <button type="button" className={`seg-btn ${!editMode ? "active" : ""}`} onClick={() => setEditMode(false)}>Preview</button>
+                      <button type="button" className={`seg-btn ${editMode ? "active" : ""}`} onClick={() => setEditMode(true)}>Edit</button>
+                    </div>
                     <button type="button" className="btn btn-secondary btn-sm" onClick={handleCopy}>
                       {copied ? <><CheckIcon size={14} className="text-accent" /> Copied</> : <><CopyIcon size={14} /> Copy</>}
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => printManuscript(draft.title, draft.full_text)}>
+                      <PrinterIcon size={14} /> PDF
                     </button>
                     <button type="button" className="btn btn-secondary btn-sm" onClick={handleDownloadMd}>
                       <DownloadIcon size={14} /> .md
@@ -447,7 +534,7 @@ export default function DraftContract() {
                       onClick={handleSaveToWorkspace}
                       disabled={saving}
                     >
-                      <ShieldCheckIcon size={14} /> {saving ? "Saving & Analyzing..." : "Save & Analyze"}
+                      <ShieldCheckIcon size={14} /> {saving ? "Saving..." : "Save & Analyze"}
                     </button>
                   </div>
                 </div>
@@ -478,19 +565,113 @@ export default function DraftContract() {
                     </div>
                   )}
 
-                  <pre className="paper-manuscript">{draft.full_text}</pre>
+                  {editMode ? (
+                    <textarea
+                      className="paper-manuscript paper-manuscript-editor"
+                      value={draft.full_text}
+                      onChange={(e) => setDraft((prev) => ({ ...prev, full_text: e.target.value }))}
+                      rows={22}
+                      aria-label="Edit contract manuscript"
+                    />
+                  ) : (
+                    <pre className="paper-manuscript">{draft.full_text}</pre>
+                  )}
+                </div>
+
+                <div className="draft-revise-bar">
+                  <span className="section-eyebrow">Iterative AI Revision</span>
+                  <form
+                    className="qa-form"
+                    onSubmit={(e) => { e.preventDefault(); handleRevise(); }}
+                  >
+                    <input
+                      type="text"
+                      className="text-input"
+                      value={revisionPrompt}
+                      onChange={(e) => setRevisionPrompt(e.target.value)}
+                      placeholder="Instruct an edit (e.g., 'Add a 60-day source code escrow clause and make arbitration seated in Bengaluru')"
+                      disabled={revising}
+                    />
+                    <button type="submit" className="btn btn-primary" disabled={revising || revisionPrompt.trim().length < 5}>
+                      <SendIcon size={14} /> {revising ? "Revising..." : "Apply Revision"}
+                    </button>
+                  </form>
+                  <div className="prompt-chips">
+                    {REVISION_SUGGESTIONS.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        className="chip-btn"
+                        onClick={() => handleRevise(s)}
+                        disabled={revising}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
+
+              <AnimatePresence>
+                {revisionLog.length > 0 && (
+                  <ExpandableSection>
+                    <section className="surface-card settings-card">
+                      <span className="section-eyebrow">Recent Revisions Applied</span>
+                      <div className="session-list">
+                        {revisionLog.map((rev, idx) => (
+                          <div key={idx} className="brief-card">
+                            <span className="brief-card-label">&ldquo;{rev.instruction}&rdquo;</span>
+                            <ul className="clean-list">
+                              {rev.changes.map((ch, cIdx) => <li key={cIdx}>{ch}</li>)}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  </ExpandableSection>
+                )}
+              </AnimatePresence>
+
+              {detectedPlaceholders.length > 0 && (
+                <section className="surface-card settings-card">
+                  <div className="section-head-row">
+                    <div>
+                      <span className="section-eyebrow">Inline Placeholder Quick-Fill ({detectedPlaceholders.length})</span>
+                      <p className="muted-caption">Fill bracketed fields detected in your draft and replace them everywhere in one click.</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={applyPlaceholders}
+                      disabled={!Object.values(placeholderValues).some((v) => v.trim())}
+                    >
+                      Apply to Manuscript
+                    </button>
+                  </div>
+                  <div className="draft-two-col">
+                    {detectedPlaceholders.map((ph) => (
+                      <div key={ph} className="field">
+                        <label className="mono-caption">{ph}</label>
+                        <input
+                          type="text"
+                          className="text-input input-sm"
+                          placeholder={`Replace ${ph}`}
+                          value={placeholderValues[ph] || ""}
+                          onChange={(e) => setPlaceholderValues((prev) => ({ ...prev, [ph]: e.target.value }))}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               {(draft.negotiation_notes?.length > 0 || draft.placeholders_to_confirm?.length > 0) && (
                 <div className="draft-notes-grid">
                   {draft.negotiation_notes?.length > 0 && (
                     <section className="surface-card settings-card">
-                      <span className="section-eyebrow"><SparklesIcon size={13} /> Commercial Negotiation Notes</span>
+                      <span className="section-eyebrow">Commercial Negotiation Notes</span>
                       <ul className="clean-list">
-                        {draft.negotiation_notes.map((note, idx) => (
-                          <li key={idx}>{note}</li>
-                        ))}
+                        {draft.negotiation_notes.map((note, idx) => <li key={idx}>{note}</li>)}
                       </ul>
                     </section>
                   )}
@@ -499,9 +680,7 @@ export default function DraftContract() {
                     <section className="surface-card settings-card">
                       <span className="section-eyebrow"><AlertTriangleIcon size={13} /> Confirm Before Signing</span>
                       <ul className="clean-list">
-                        {draft.placeholders_to_confirm.map((item, idx) => (
-                          <li key={idx}>{item}</li>
-                        ))}
+                        {draft.placeholders_to_confirm.map((item, idx) => <li key={idx}>{item}</li>)}
                       </ul>
                     </section>
                   )}

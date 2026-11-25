@@ -7,12 +7,11 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import ContractDrawer from "../components/ContractDrawer";
 import LibrarySearchModal from "../components/LibrarySearchModal";
 import {
-  ArrowRightIcon, CompareIcon, FileTextIcon, LockIcon, MessageIcon, PenToolIcon, PlusIcon,
-  RefreshIcon, SearchIcon, ServerIcon, ShieldCheckIcon,
-  SparklesIcon, TrashIcon, XIcon,
+  ArrowRightIcon, CompareIcon, FileTextIcon, MessageIcon, PenToolIcon, PlusIcon,
+  RefreshIcon, ScaleIcon, SearchIcon, ShieldAlertIcon, ShieldCheckIcon, TrashIcon, XIcon,
 } from "../components/Icons";
-import { PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
-import { EASE_EDITORIAL } from "../components/motionTokens";
+import { AnimatedNumber, FadePanel, PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
+import { SPRING_SNAPPY } from "../components/motionTokens";
 
 const QUICK_QUERIES = [
   "Termination notice period",
@@ -22,27 +21,28 @@ const QUICK_QUERIES = [
   "Intellectual property ownership",
 ];
 
-const EDITORIAL_PILLARS = [
+const LANDING_CAPABILITIES = [
   {
-    num: "01",
-    title: "Clause, Risk & Obligation Triage",
-    body: "Classifies 14 legal categories, surfaces subtle semantic risks, flags missing protections, and extracts a structured party-by-party deadlines ledger.",
+    icon: ShieldAlertIcon,
+    title: "Clause & Risk Triage",
+    body: "Classifies 14 legal categories, scores severity, generates an executive negotiation brief, extracts a deadlines ledger, and drafts missing protections.",
   },
   {
-    num: "02",
-    title: "Multi-Turn Grounded Q&A",
-    body: "Hold follow-up conversations anchored strictly to your document with clickable page citations—and explicit refusal whenever the contract is silent.",
+    icon: MessageIcon,
+    title: "Citation-Backed Q&A",
+    body: "Hold multi-turn conversations anchored to exact pages and verbatim excerpts—with explicit refusal whenever a contract is silent.",
   },
   {
-    num: "03",
-    title: "Redline Diffs & Firm Playbooks",
-    body: "Align contract versions with word-level redlines, evaluate against jurisdiction rule packs, and generate balanced fallback clauses on demand.",
+    icon: CompareIcon,
+    title: "Redlines, Playbooks & Drafting",
+    body: "Compare revisions with word-level diffs, run semantic firm-playbook audits, generate stance-aware redlines, and draft agreements from 7 templates.",
   },
-  {
-    num: "04",
-    title: "AI Contract Drafting Studio",
-    body: "Draft clean, section-numbered MSAs, NDAs, employment, contractor, and lease agreements tailored to your terms, then analyze in one click.",
-  },
+];
+
+const SHOWCASE_TABS = [
+  { id: "risk", label: "Risk Triage" },
+  { id: "redline", label: "Redline Studio" },
+  { id: "qa", label: "Grounded Q&A" },
 ];
 
 const formatDate = (d) =>
@@ -50,6 +50,134 @@ const formatDate = (d) =>
 
 const formatSize = (b) =>
   !b ? "0 KB" : b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(2)} MB`;
+
+function LandingShowcase() {
+  const [activeView, setActiveView] = useState("risk");
+
+  return (
+    <div className="desk-frame" aria-label="Interactive contract review preview">
+      <div className="desk-frame-bar">
+        <div className="desk-doc-id">
+          <span className="mono-tag">PDF</span>
+          <span className="desk-doc-name">Master Services Agreement — Northstar.pdf</span>
+        </div>
+        <div className="desk-tab-group" role="tablist" aria-label="Preview modes">
+          {SHOWCASE_TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={activeView === t.id}
+              className={`desk-tab ${activeView === t.id ? "active" : ""}`}
+              onClick={() => setActiveView(t.id)}
+            >
+              <span>{t.label}</span>
+              {activeView === t.id && (
+                <motion.span layoutId="landing-desk-tab" className="desk-tab-bg" transition={SPRING_SNAPPY} />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="desk-frame-body">
+        <AnimatePresence mode="wait">
+          {activeView === "risk" && (
+            <FadePanel panelKey="risk" className="desk-panel">
+              <div className="desk-panel-head">
+                <div>
+                  <span className="desk-eyebrow">Section 7.2 · Limitation of Liability</span>
+                  <div className="desk-clause-heading">Asymmetric uncapped indemnity detected</div>
+                </div>
+                <span className="risk-pill risk-high">HIGH · 74/100</span>
+              </div>
+
+              <p className="desk-excerpt">
+                Notwithstanding any other provision herein,{" "}
+                <mark className="desk-mark-risk">
+                  Customer&apos;s indemnification obligations and liability for indirect claims shall remain uncapped
+                </mark>{" "}
+                while Provider&apos;s aggregate liability is limited to one (1) month&apos;s fees.
+              </p>
+
+              <div className="desk-meta-strip">
+                <div>
+                  <span className="desk-eyebrow">Negotiation Verdict</span>
+                  <p className="desk-meta-val">Negotiate before signing — 2 high-risk clauses &amp; 1 missing protection</p>
+                </div>
+                <span className="citation-tag">Page 6 · §7.2</span>
+              </div>
+
+              <div className="desk-bar-wrap">
+                <div className="section-head-row">
+                  <span className="mono-caption">Risk Profile</span>
+                  <span className="mono-caption">2 High · 4 Medium · 12 Low</span>
+                </div>
+                <div className="risk-bar">
+                  <div className="risk-bar-seg seg-high" style={{ width: "16%" }} />
+                  <div className="risk-bar-seg seg-medium" style={{ width: "28%" }} />
+                  <div className="risk-bar-seg seg-low" style={{ width: "56%" }} />
+                </div>
+              </div>
+            </FadePanel>
+          )}
+
+          {activeView === "redline" && (
+            <FadePanel panelKey="redline" className="desk-panel">
+              <div className="desk-panel-head">
+                <div>
+                  <span className="desk-eyebrow">Balanced Fallback Redline · Playbook Rule #3</span>
+                  <div className="desk-clause-heading">Mutual 12-month fee cap proposed</div>
+                </div>
+                <span className="risk-pill risk-low">BALANCED</span>
+              </div>
+
+              <div className="desk-diff-box">
+                <p className="redline-prose">
+                  Except for confidentiality breaches or willful misconduct,{" "}
+                  <del className="diff-del">Customer&apos;s liability shall remain uncapped while Provider is limited to one month&apos;s fees</del>{" "}
+                  <ins className="diff-add">neither party&apos;s aggregate liability shall exceed fees paid during the preceding twelve (12) months</ins>
+                  , and neither party shall be liable for indirect or consequential damages.
+                </p>
+              </div>
+
+              <div className="desk-meta-strip">
+                <div>
+                  <span className="desk-eyebrow">Tier-2 Compromise Ready</span>
+                  <p className="desk-meta-val">2× annual fees super-cap reserved solely for third-party IP claims.</p>
+                </div>
+                <span className="mono-caption">Indian Contract Act · §74</span>
+              </div>
+            </FadePanel>
+          )}
+
+          {activeView === "qa" && (
+            <FadePanel panelKey="qa" className="desk-panel">
+              <div className="desk-qa-question">What notice is required to prevent automatic renewal?</div>
+              <div className="desk-qa-answer">
+                <div className="section-head-row">
+                  <span className="desk-verified-label">
+                    <span className="verified-dot" /> Verified from contract
+                  </span>
+                  <span className="confidence-pill conf-high">HIGH CONFIDENCE</span>
+                </div>
+                <p className="desk-excerpt">
+                  Either party must send written non-renewal notice at least <strong>90 days</strong> before the
+                  end of the 24-month Initial Term; otherwise the agreement renews automatically for successive
+                  12-month terms with up to a 15% fee increase.
+                </p>
+                <div className="citation-row">
+                  <span className="citation-tag">Page 3, Section 4.1 · Term &amp; Auto-Renewal</span>
+                  <span className="citation-tag">Page 4, Section 4.2 · Fee Escalation</span>
+                </div>
+              </div>
+            </FadePanel>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const { token, isAuthenticated } = useAuth();
@@ -169,94 +297,42 @@ export default function Dashboard() {
 
   if (!isAuthenticated) {
     return (
-      <PageReveal className="landing-hero">
-        <section className="hero-split">
+      <PageReveal className="landing-page">
+        <section className="hero-editorial">
           <div className="hero-content">
-            <span className="hero-kicker">Document-Grounded Legal Intelligence</span>
+            <span className="hero-eyebrow">Document-Grounded Legal Review</span>
             <h1 className="hero-title">Understand every obligation, risk, and exit clause before you sign.</h1>
             <p className="hero-subtitle">
-              Upload employment agreements, vendor MSAs, NDAs, or leases—or draft clean commercial agreements from scratch.
-              Inspect structured clauses, obligations ledgers, word-level redlines, firm playbook checks, and page-cited Q&amp;A in one editorial workspace.
+              Upload employment agreements, vendor MSAs, NDAs, or leases—or draft clean agreements from scratch.
+              Legal Contract Agent extracts structured clauses, flags high-risk terms and missing protections,
+              compares revisions side by side, and answers questions strictly with page and section citations.
             </p>
             <div className="hero-actions">
-              <Link to="/register" className="btn btn-primary btn-lg">Create free workspace <ArrowRightIcon size={16} /></Link>
+              <Link to="/register" className="btn btn-primary btn-lg">
+                Create free workspace <ArrowRightIcon size={15} />
+              </Link>
               <Link to="/login" className="btn btn-secondary btn-lg">Sign in</Link>
             </div>
             <p className="hero-meta-note">
-              Supports PDF (with automatic OCR for scans), DOCX, and TXT · Informational review only, not legal advice.
+              Supports PDF (with automatic OCR for scanned deeds), DOCX, and TXT · Private tenant isolation
             </p>
           </div>
 
-          <div className="hero-preview-wrap" aria-hidden="true">
-            <div className="hero-preview-backsheet" />
-            <motion.div
-              className="hero-preview-sheet"
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.45, delay: 0.08, ease: EASE_EDITORIAL }}
-            >
-              <div className="preview-sheet-top">
-                <div>
-                  <div className="preview-clause-label">Vendor Revision · PDF · 14 Pages</div>
-                  <div className="preview-doc-title">Master Services Agreement</div>
-                </div>
-                <span className="risk-pill risk-high">HIGH · 74/100</span>
-              </div>
-
-              <div className="preview-clause-block">
-                <span className="preview-clause-label">Section 7.2 · Limitation of Liability (Page 6)</span>
-                <p className="preview-clause-text">
-                  Notwithstanding any other provision herein,{" "}
-                  <mark className="preview-highlight-risk">
-                    Customer&apos;s indemnification obligations and liability for indirect claims shall remain uncapped
-                  </mark>{" "}
-                  while Vendor&apos;s aggregate liability is limited to one month&apos;s fees.
-                </p>
-              </div>
-
-              <div className="preview-callout">
-                <div className="preview-callout-head">
-                  <span>Fallback Redline Suggested</span>
-                  <span className="mono-caption">Playbook Rule #3</span>
-                </div>
-                <p>
-                  Cap mutual aggregate liability at fees paid in the preceding 12 months and exclude consequential damages symmetrically for both parties.
-                </p>
-              </div>
-
-              <div className="preview-sheet-foot">
-                <div className="preview-meter-wrap">
-                  <div className="section-head-row">
-                    <span className="mono-caption">Clause Risk Profile</span>
-                    <span className="mono-caption">3H · 4M · 11L</span>
-                  </div>
-                  <div className="risk-bar">
-                    <div className="risk-bar-seg seg-high" style={{ width: "20%" }} />
-                    <div className="risk-bar-seg seg-medium" style={{ width: "26%" }} />
-                    <div className="risk-bar-seg seg-low" style={{ width: "54%" }} />
-                  </div>
-                </div>
-                <span className="citation-tag">Page 6, §7.2</span>
-              </div>
-            </motion.div>
-          </div>
+          <LandingShowcase />
         </section>
 
-        <StaggerContainer className="editorial-pillars" stagger={0.05}>
-          {EDITORIAL_PILLARS.map((item) => (
-            <StaggerItem key={item.num} className="editorial-pillar">
-              <span className="pillar-num">{item.num}</span>
-              <h3>{item.title}</h3>
-              <p>{item.body}</p>
-            </StaggerItem>
-          ))}
+        <StaggerContainer className="capability-grid" stagger={0.06}>
+          {LANDING_CAPABILITIES.map((item) => {
+            const Icon = item.icon;
+            return (
+              <StaggerItem key={item.title} className="surface-card capability-card">
+                <span className="capability-icon"><Icon size={17} /></span>
+                <h3>{item.title}</h3>
+                <p>{item.body}</p>
+              </StaggerItem>
+            );
+          })}
         </StaggerContainer>
-
-        <div className="trust-strip-card">
-          <span className="trust-item"><LockIcon size={15} /> Rotating HttpOnly refresh tokens &amp; RBAC</span>
-          <span className="trust-item"><ShieldCheckIcon size={15} /> Multi-tenant MongoDB &amp; vector isolation</span>
-          <span className="trust-item"><ServerIcon size={15} /> Prompt-injection guards &amp; circuit-breaker AI pool</span>
-        </div>
       </PageReveal>
     );
   }
@@ -266,7 +342,9 @@ export default function Dashboard() {
       <div className="page-header">
         <div>
           <h1 className="page-heading">Contract Workspace</h1>
-          <p className="page-description">Manage agreements, inspect risk profiles and deadlines, draft new contracts, and query clauses with verifiable citations.</p>
+          <p className="page-description">
+            Review extracted clauses, inspect risk profiles and deadlines, draft agreements, and query clauses with verifiable citations.
+          </p>
         </div>
         <div className="page-header-actions">
           <button type="button" className="btn btn-secondary" onClick={loadWorkspace} disabled={loading}>
@@ -281,10 +359,46 @@ export default function Dashboard() {
       </div>
 
       <StaggerContainer className="kpi-grid" stagger={0.04}>
-        <StaggerItem className="kpi-card"><span className="kpi-label">Total Contracts</span><span className="kpi-value">{metrics.total}</span></StaggerItem>
-        <StaggerItem className="kpi-card"><span className="kpi-label">Analyzed</span><span className="kpi-value">{metrics.analyzed}</span></StaggerItem>
-        <StaggerItem className="kpi-card"><span className="kpi-label">High-Risk Clauses</span><span className={`kpi-value ${metrics.highRiskClauses ? "text-danger" : ""}`}>{metrics.highRiskClauses}</span></StaggerItem>
-        <StaggerItem className="kpi-card"><span className="kpi-label">Indexed Passages</span><span className="kpi-value text-accent">{metrics.vectors}</span></StaggerItem>
+        <StaggerItem
+          className={`kpi-card kpi-interactive ${statusFilter === "all" && riskFilter === "all" ? "kpi-active" : ""}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => { setStatusFilter("all"); setRiskFilter("all"); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStatusFilter("all"); setRiskFilter("all"); } }}
+        >
+          <span className="kpi-label">Contracts</span>
+          <span className="kpi-value"><AnimatedNumber value={metrics.total} /></span>
+          <span className="kpi-sub">All workspace documents</span>
+        </StaggerItem>
+        <StaggerItem
+          className={`kpi-card kpi-interactive ${statusFilter === "completed" && riskFilter === "all" ? "kpi-active" : ""}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => { setStatusFilter("completed"); setRiskFilter("all"); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStatusFilter("completed"); setRiskFilter("all"); } }}
+        >
+          <span className="kpi-label">Analyzed</span>
+          <span className="kpi-value"><AnimatedNumber value={metrics.analyzed} /></span>
+          <span className="kpi-sub">Clauses &amp; risks extracted</span>
+        </StaggerItem>
+        <StaggerItem
+          className={`kpi-card kpi-interactive ${riskFilter === "high" ? "kpi-active" : ""}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => { setStatusFilter("completed"); setRiskFilter((r) => (r === "high" ? "all" : "high")); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStatusFilter("completed"); setRiskFilter((r) => (r === "high" ? "all" : "high")); } }}
+        >
+          <span className="kpi-label">High-Risk Clauses</span>
+          <span className={`kpi-value ${metrics.highRiskClauses ? "text-danger" : ""}`}>
+            <AnimatedNumber value={metrics.highRiskClauses} />
+          </span>
+          <span className="kpi-sub">{riskFilter === "high" ? "Showing high-risk docs" : "Click to filter high-risk"}</span>
+        </StaggerItem>
+        <StaggerItem className="kpi-card">
+          <span className="kpi-label">Indexed Passages</span>
+          <span className="kpi-value"><AnimatedNumber value={metrics.vectors} /></span>
+          <span className="kpi-sub">Tenant-isolated vectors</span>
+        </StaggerItem>
       </StaggerContainer>
 
       <section className="search-strip">
@@ -311,26 +425,52 @@ export default function Dashboard() {
         <div className="prompt-chips">
           <span className="chip-prefix">Quick queries</span>
           {QUICK_QUERIES.map((chip) => (
-            <button key={chip} type="button" className="chip-btn" onClick={() => { setLibraryQuery(chip); setSearchModal({ open: true, query: chip }); }}>
+            <button
+              key={chip}
+              type="button"
+              className="chip-btn"
+              onClick={() => { setLibraryQuery(chip); setSearchModal({ open: true, query: chip }); }}
+            >
               {chip}
             </button>
           ))}
         </div>
       </section>
 
-      {banner && (
-        <div className={`alert alert-${banner.tone} alert-dismissible`} role="status">
-          <span>{banner.text}</span>
-          <button type="button" className="icon-btn" onClick={() => setBanner(null)} aria-label="Dismiss"><XIcon size={14} /></button>
-        </div>
-      )}
+      <AnimatePresence>
+        {banner && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            className={`alert alert-${banner.tone} alert-dismissible`}
+            role="status"
+          >
+            <span>{banner.text}</span>
+            <button type="button" className="icon-btn" onClick={() => setBanner(null)} aria-label="Dismiss">
+              <XIcon size={14} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <section className="surface-card table-section">
         <div className="table-toolbar">
           <div className="toolbar-left-group">
             <div className="segmented-control">
-              {[["all", `All (${contracts.length})`], ["completed", `Analyzed (${metrics.analyzed})`], ["pending", `Pending (${contracts.length - metrics.analyzed})`]].map(([key, label]) => (
-                <button key={key} type="button" className={`seg-btn ${statusFilter === key ? "active" : ""}`} onClick={() => setStatusFilter(key)}>{label}</button>
+              {[
+                ["all", `All (${contracts.length})`],
+                ["completed", `Analyzed (${metrics.analyzed})`],
+                ["pending", `Pending (${contracts.length - metrics.analyzed})`],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`seg-btn ${statusFilter === key ? "active" : ""}`}
+                  onClick={() => setStatusFilter(key)}
+                >
+                  {label}
+                </button>
               ))}
             </div>
             <div className="toolbar-filters">
@@ -369,11 +509,17 @@ export default function Dashboard() {
           </div>
         ) : !visibleContracts.length ? (
           <div className="empty-box">
-            <FileTextIcon size={28} />
+            <FileTextIcon size={26} />
             <h3>{contracts.length ? "No contracts match this filter" : "No contracts in your workspace yet"}</h3>
-            <p>{contracts.length ? "Reset filters to view all uploaded contracts." : "Upload a PDF, DOCX, or TXT contract — or draft one from a template — to extract clauses and run grounded Q&A."}</p>
+            <p>
+              {contracts.length
+                ? "Reset active filters to inspect all uploaded contracts."
+                : "Upload a PDF, DOCX, or TXT contract—or draft one from a template—to extract clauses, score risks, and ask cited questions."}
+            </p>
             {contracts.length ? (
-              <button type="button" className="btn btn-secondary" onClick={() => { setStatusFilter("all"); setRiskFilter("all"); setTableSearch(""); }}>Reset filters</button>
+              <button type="button" className="btn btn-secondary" onClick={() => { setStatusFilter("all"); setRiskFilter("all"); setTableSearch(""); }}>
+                Reset filters
+              </button>
             ) : (
               <div className="hero-actions">
                 <Link to="/upload" className="btn btn-primary"><PlusIcon size={15} /> Upload Contract</Link>
@@ -385,7 +531,13 @@ export default function Dashboard() {
           <div className="table-wrap">
             <table className="contracts-table">
               <thead>
-                <tr><th>Document</th><th>Status</th><th>Risk Profile</th><th>Details</th><th className="col-actions">Actions</th></tr>
+                <tr>
+                  <th>Document</th>
+                  <th>Status</th>
+                  <th>Risk Profile</th>
+                  <th>Details</th>
+                  <th className="col-actions">Actions</th>
+                </tr>
               </thead>
               <tbody>
                 {visibleContracts.map((doc) => {
@@ -399,11 +551,16 @@ export default function Dashboard() {
                         <div className="doc-cell">
                           <span className="mono-tag">{(doc.fileType || "doc").toUpperCase()}</span>
                           <div className="doc-cell-text">
-                            <button type="button" className="doc-title-link" onClick={() => (done ? (setActiveContract(doc), setDrawerTab("overview")) : handleAnalyze(doc))}>
+                            <button
+                              type="button"
+                              className="doc-title-link"
+                              onClick={() => (done ? (setActiveContract(doc), setDrawerTab("overview")) : handleAnalyze(doc))}
+                            >
                               {doc.title || doc.fileName}
                             </button>
                             <span className="doc-submeta">
-                              {doc.fileName} · {formatSize(doc.fileSize)} · {formatDate(doc.createdAt)}{doc.visibility === "team" ? " · Team" : ""}
+                              {doc.fileName} · {formatSize(doc.fileSize)} · {formatDate(doc.createdAt)}
+                              {doc.visibility === "team" ? " · Team" : ""}
                             </span>
                           </div>
                         </div>
@@ -411,7 +568,15 @@ export default function Dashboard() {
                       <td>
                         <span className={`status-dot-pill status-${doc.status || "uploaded"}`}>
                           <span className="dot" />
-                          {done ? "Analyzed" : doc.status === "processing" ? "Processing" : doc.status === "queued" ? "Queued" : doc.status === "failed" ? "Failed" : "Uploaded"}
+                          {done
+                            ? "Analyzed"
+                            : doc.status === "processing"
+                              ? "Processing"
+                              : doc.status === "queued"
+                                ? "Queued"
+                                : doc.status === "failed"
+                                  ? "Failed"
+                                  : "Uploaded"}
                         </span>
                       </td>
                       <td>
@@ -422,29 +587,68 @@ export default function Dashboard() {
                               <span className="mono-caption">{r.high || 0}H / {r.medium || 0}M / {r.low || 0}L</span>
                             </div>
                             <div className="mini-score-track">
-                              <span className={`mini-score-fill seg-${r.overallLevel || "low"}`} style={{ width: `${Math.min(100, Math.max(6, r.score || 0))}%` }} />
+                              <span
+                                className={`mini-score-fill seg-${r.overallLevel || "low"}`}
+                                style={{ width: `${Math.min(100, Math.max(6, r.score || 0))}%` }}
+                              />
                             </div>
                           </div>
-                        ) : <span className="muted-caption">Not analyzed</span>}
+                        ) : (
+                          <span className="muted-caption">Not analyzed</span>
+                        )}
                       </td>
                       <td>
                         {done ? (
-                          <span className="mono-caption">{doc.pageCount || 1}p · {doc.totalSections || 0} sec · {(doc.totalTokens || 0).toLocaleString()} tok</span>
-                        ) : <span className="muted-caption">Ready for parsing</span>}
+                          <span className="mono-caption">
+                            {doc.pageCount || 1}p · {doc.totalSections || 0} sec · {(doc.totalTokens || 0).toLocaleString()} tok
+                          </span>
+                        ) : (
+                          <span className="muted-caption">Ready for parsing</span>
+                        )}
                       </td>
                       <td className="col-actions">
                         <div className="row-actions">
                           {done ? (
                             <>
-                              <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setActiveContract(doc); setDrawerTab("overview"); }}>Inspect</button>
-                              <button type="button" className="btn btn-primary btn-sm" onClick={() => { setActiveContract(doc); setDrawerTab("qa"); }}><MessageIcon size={14} /> Ask</button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => { setActiveContract(doc); setDrawerTab("overview"); }}
+                              >
+                                Inspect
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => { setActiveContract(doc); setDrawerTab("playbook"); }}
+                                title="Run Playbook Compliance Audit"
+                              >
+                                <ShieldCheckIcon size={14} /> Audit
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={() => { setActiveContract(doc); setDrawerTab("qa"); }}
+                              >
+                                <MessageIcon size={14} /> Ask
+                              </button>
                             </>
                           ) : (
-                            <button type="button" className="btn btn-primary btn-sm" onClick={() => handleAnalyze(doc)} disabled={busy}>
-                              <SparklesIcon size={14} /> {busy ? "Analyzing..." : doc.status === "failed" ? "Retry" : "Analyze"}
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              onClick={() => handleAnalyze(doc)}
+                              disabled={busy}
+                            >
+                              <ScaleIcon size={14} /> {busy ? "Analyzing..." : doc.status === "failed" ? "Retry" : "Analyze"}
                             </button>
                           )}
-                          <button type="button" className="icon-btn icon-btn-danger" onClick={() => setDeleteTarget(doc)} aria-label={`Delete ${doc.title || doc.fileName}`}>
+                          <button
+                            type="button"
+                            className="icon-btn icon-btn-danger"
+                            onClick={() => setDeleteTarget(doc)}
+                            aria-label={`Delete ${doc.title || doc.fileName}`}
+                          >
                             <TrashIcon size={15} />
                           </button>
                         </div>
@@ -476,7 +680,12 @@ export default function Dashboard() {
       </AnimatePresence>
       <AnimatePresence>
         {searchModal.open && (
-          <LibrarySearchModal key={searchModal.query} initialQuery={searchModal.query} token={token} onClose={() => setSearchModal({ open: false, query: "" })} />
+          <LibrarySearchModal
+            key={searchModal.query}
+            initialQuery={searchModal.query}
+            token={token}
+            onClose={() => setSearchModal({ open: false, query: "" })}
+          />
         )}
       </AnimatePresence>
       <ConfirmDialog

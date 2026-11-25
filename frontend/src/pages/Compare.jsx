@@ -3,8 +3,8 @@ import { Link } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { contractsApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { CompareIcon, DownloadIcon, PlusIcon, SwapIcon } from "../components/Icons";
-import { FadePanel, PageReveal } from "../components/Motion";
+import { CheckIcon, CompareIcon, CopyIcon, DownloadIcon, PlusIcon, SlidersIcon, SwapIcon } from "../components/Icons";
+import { ExpandableSection, FadePanel, PageReveal } from "../components/Motion";
 import { SPRING_SNAPPY } from "../components/motionTokens";
 
 function wordDiff(textA = "", textB = "") {
@@ -52,6 +52,9 @@ function exportComparisonMarkdown(result) {
     result.executive_summary || "Comparison completed.",
     "",
   ];
+  if (result.favorability_assessment) {
+    lines.push(`**Commercial Balance:** ${result.favorability_assessment}`, "");
+  }
   if (result.material_changes?.length) {
     lines.push("## Material Differences", ...result.material_changes.map((c) => `- ${c}`), "");
   }
@@ -112,6 +115,10 @@ export default function Compare() {
   const [tab, setTab] = useState("modified");
   const [redline, setRedline] = useState(true);
 
+  const [counterRedlines, setCounterRedlines] = useState({});
+  const [counterBusy, setCounterBusy] = useState({});
+  const [copiedId, setCopiedId] = useState(null);
+
   useEffect(() => {
     if (!token) return;
     let active = true;
@@ -137,6 +144,7 @@ export default function Compare() {
     setComparing(true);
     setError(null);
     setResult(null);
+    setCounterRedlines({});
     try {
       const data = await contractsApi.compare(token, idA, idB);
       setResult(data);
@@ -149,12 +157,43 @@ export default function Compare() {
     }
   };
 
+  const draftCounter = async (idx, item) => {
+    if (counterBusy[idx]) return;
+    setCounterBusy((p) => ({ ...p, [idx]: true }));
+    setError(null);
+    try {
+      const suggestion = await contractsApi.suggestAdhocRedline(token, {
+        clauseType: item.clause_type,
+        clauseText: item.text_b,
+        riskLevel: item.risk_b || "medium",
+        riskReason: (item.change_notes || []).join(" "),
+        stance: "balanced",
+        customInstruction: `Counter-propose balanced wording closer to the baseline version: "${String(item.text_a || "").slice(0, 320)}"`,
+      });
+      setCounterRedlines((p) => ({ ...p, [idx]: suggestion }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCounterBusy((p) => ({ ...p, [idx]: false }));
+    }
+  };
+
+  const copyText = async (id, text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId((curr) => (curr === id ? null : curr)), 1600);
+    } catch { /* ignore */ }
+  };
+
+  const rc = result?.risk_comparison;
+
   return (
     <PageReveal className="workspace-page">
       <div className="page-header">
         <div>
           <h1 className="page-heading">Revision Comparison</h1>
-          <p className="page-description">Align clauses across two agreements with word-level redlines and risk-shift alerts.</p>
+          <p className="page-description">Align clauses across two agreements with word-level redlines, risk-shift telemetry, and instant counter-proposals.</p>
         </div>
         <div className="page-header-actions">
           {result && (
@@ -170,12 +209,12 @@ export default function Compare() {
         <div className="surface-card state-box"><div className="spinner" /><p>Loading analyzed contracts...</p></div>
       ) : contracts.length < 2 ? (
         <div className="surface-card empty-box">
-          <CompareIcon size={28} />
+          <CompareIcon size={26} />
           <h3>At least two analyzed contracts are needed</h3>
           <p>Upload and analyze two agreements to run a clause-by-clause redline comparison.</p>
           <div className="hero-actions">
             <Link to="/upload" className="btn btn-primary">Upload Contract</Link>
-            <Link to="/" className="btn btn-secondary">Back to Portfolio</Link>
+            <Link to="/" className="btn btn-secondary">Back to Workspace</Link>
           </div>
         </div>
       ) : (
@@ -213,13 +252,47 @@ export default function Compare() {
           </form>
 
           {error && <div className="alert alert-error">{error}</div>}
-          {comparing && <div className="surface-card state-box"><div className="spinner" /><p>Matching clauses semantically...</p></div>}
+          {comparing && <div className="surface-card state-box"><div className="spinner" /><p>Matching clauses semantically and computing commercial risk shift...</p></div>}
 
           {result && (
             <div className="compare-results">
+              {rc && (
+                <div className="compare-delta-strip">
+                  <div className="kpi-card">
+                    <span className="kpi-label">Baseline Risk (A)</span>
+                    <span className="kpi-value">{rc.score_a}<small className="kpi-unit">/100</small></span>
+                    <span className="kpi-sub">{(rc.level_a || "low").toUpperCase()} overall</span>
+                  </div>
+                  <div className="kpi-card">
+                    <span className="kpi-label">Revised Risk (B)</span>
+                    <span className="kpi-value">{rc.score_b}<small className="kpi-unit">/100</small></span>
+                    <span className="kpi-sub">{(rc.level_b || "low").toUpperCase()} overall</span>
+                  </div>
+                  <div className="kpi-card">
+                    <span className="kpi-label">Net Risk Shift</span>
+                    <span className={`kpi-value ${rc.risk_delta > 0 ? "text-danger" : rc.risk_delta < 0 ? "text-accent" : ""}`}>
+                      {rc.risk_delta > 0 ? `+${rc.risk_delta}` : rc.risk_delta}
+                    </span>
+                    <span className="kpi-sub">
+                      {rc.direction === "increased" ? "Risk increased in B" : rc.direction === "reduced" ? "Risk reduced in B" : "Neutral risk change"}
+                    </span>
+                  </div>
+                  <div className="kpi-card">
+                    <span className="kpi-label">Clauses Changed</span>
+                    <span className="kpi-value">
+                      {(result.counts?.modified || 0) + (result.counts?.added || 0) + (result.counts?.removed || 0)}
+                    </span>
+                    <span className="kpi-sub">{result.counts?.unchanged || 0} unchanged</span>
+                  </div>
+                </div>
+              )}
+
               <section className="surface-card compare-summary-card">
                 <div className="section-eyebrow">Comparison Overview</div>
                 <p className="summary-prose">{result.executive_summary}</p>
+                {result.favorability_assessment && (
+                  <p className="muted-caption"><strong>Commercial shift:</strong> {result.favorability_assessment}</p>
+                )}
                 {result.material_changes?.length > 0 && (
                   <div className="compare-highlights">
                     <div className="section-eyebrow">Material Differences</div>
@@ -266,11 +339,22 @@ export default function Compare() {
                       ? <div className="surface-card state-box"><p>No modified clauses detected.</p></div>
                       : result.modified.map((item, i) => {
                           const diff = redline ? wordDiff(item.text_a, item.text_b) : null;
+                          const cr = counterRedlines[i];
                           return (
                             <article key={i} className="surface-card diff-card">
                               <div className="diff-card-head">
                                 <span className="clause-category">{item.clause_type}</span>
-                                <span className="mono-caption">{Math.round((item.similarity || 0) * 100)}% semantic match</span>
+                                <div className="clause-head-right">
+                                  <span className="mono-caption">{Math.round((item.similarity || 0) * 100)}% semantic match</span>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => draftCounter(i, item)}
+                                    disabled={Boolean(counterBusy[i])}
+                                  >
+                                    <SlidersIcon size={13} /> {counterBusy[i] ? "Drafting..." : cr ? "Regenerate Counter" : "Draft Counter-Redline"}
+                                  </button>
+                                </div>
                               </div>
                               {item.change_notes?.length > 0 && (
                                 <div className="diff-notes">
@@ -291,6 +375,27 @@ export default function Compare() {
                                   </div>
                                 ))}
                               </div>
+
+                              <AnimatePresence>
+                                {cr && (
+                                  <ExpandableSection className="drafted-missing-box">
+                                    <div className="section-head-row">
+                                      <span className="section-eyebrow">Proposed Counter-Redline</span>
+                                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => copyText(`cmp-${i}`, cr.suggested_text)}>
+                                        {copiedId === `cmp-${i}` ? <><CheckIcon size={13} /> Copied</> : <><CopyIcon size={13} /> Copy</>}
+                                      </button>
+                                    </div>
+                                    <p className="redline-suggested-text">{cr.suggested_text}</p>
+                                    {cr.rationale && <p className="muted-caption">{cr.rationale}</p>}
+                                    {cr.fallback_compromise && (
+                                      <div className="tier2-box">
+                                        <span className="mono-caption">Tier-2 Compromise</span>
+                                        <p>{cr.fallback_compromise}</p>
+                                      </div>
+                                    )}
+                                  </ExpandableSection>
+                                )}
+                              </AnimatePresence>
                             </article>
                           );
                         })

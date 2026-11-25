@@ -141,10 +141,23 @@ export const contractsApi = {
       body: { visibility },
     }),
   clauses: (token, id) => request(`/api/contracts/${id}/clauses`, { token }),
-  suggestRedline: (token, contractId, clauseId) =>
+  suggestRedline: (token, contractId, clauseId, options = {}) =>
     request(`/api/contracts/${contractId}/clauses/${clauseId}/suggest-redline`, {
       method: "POST",
       token,
+      body: options,
+    }),
+  suggestAdhocRedline: (token, payload) =>
+    request("/api/contracts/clauses/redline-adhoc", {
+      method: "POST",
+      token,
+      body: payload,
+    }),
+  draftMissingClause: (token, contractId, payload) =>
+    request(`/api/contracts/${contractId}/draft-missing-clause`, {
+      method: "POST",
+      token,
+      body: payload,
     }),
   risks: (token, id) => request(`/api/contracts/${id}/risks`, { token }),
   qaHistory: (token, id) => request(`/api/contracts/${id}/qa`, { token }),
@@ -170,6 +183,8 @@ export const contractsApi = {
   draftTemplates: (token) => request("/api/contracts/draft/templates", { token }),
   draft: (token, payload) =>
     request("/api/contracts/draft", { method: "POST", token, body: payload }),
+  reviseDraft: (token, payload) =>
+    request("/api/contracts/draft/revise", { method: "POST", token, body: payload }),
   saveDraft: (token, payload) =>
     request("/api/contracts/draft/save", { method: "POST", token, body: payload }),
   vectorStats: (token) => request("/api/contracts/stats/vectors", { token }),
@@ -207,8 +222,10 @@ export const playbookApi = {
   update: (token, payload) => request("/api/playbook", { method: "PUT", token, body: payload }),
   presets: (token) => request("/api/playbook/presets", { token }),
   applyPreset: (token, presetId) => request(`/api/playbook/presets/${presetId}`, { method: "POST", token }),
-  evaluate: (token, contractId) =>
-    request(`/api/playbook/evaluate/${contractId}`, { method: "POST", token }),
+  generateRules: (token, payload) =>
+    request("/api/playbook/generate-rules", { method: "POST", token, body: payload }),
+  evaluate: (token, contractId, options = { useAiAudit: true }) =>
+    request(`/api/playbook/evaluate/${contractId}`, { method: "POST", token, body: options }),
 };
 
 export const teamApi = {

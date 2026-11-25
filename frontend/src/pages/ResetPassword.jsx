@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { authApi } from "../api/client";
 import { BrandMark, CheckCircleIcon } from "../components/Icons";
+import { PageReveal } from "../components/Motion";
 
 export default function ResetPassword() {
   const [searchParams] = useSearchParams();
@@ -31,7 +32,7 @@ export default function ResetPassword() {
   };
 
   return (
-    <div className="narrow-page">
+    <PageReveal className="narrow-page">
       <section className="surface-card upload-form" style={{ maxWidth: 480, margin: "28px auto" }}>
         <div className="auth-panel-head">
           <BrandMark size={28} />
@@ -106,6 +107,6 @@ export default function ResetPassword() {
           </form>
         )}
       </section>
-    </div>
+    </PageReveal>
   );
 }

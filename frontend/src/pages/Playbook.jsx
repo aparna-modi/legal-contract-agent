@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { AnimatePresence } from "framer-motion";
 import { contractsApi, playbookApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { AlertTriangleIcon, CheckCircleIcon, PlusIcon, ShieldCheckIcon, SparklesIcon, TrashIcon } from "../components/Icons";
-import { PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
+import { AlertTriangleIcon, CheckCircleIcon, PlusIcon, ScaleIcon, ShieldCheckIcon, TrashIcon } from "../components/Icons";
+import { ExpandableSection, PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
 
 const RULE_LABELS = {
   require_clause: "Require Clause Category",
@@ -26,6 +27,12 @@ export default function Playbook() {
   const [evaluation, setEvaluation] = useState(null);
   const [banner, setBanner] = useState(null);
   const [draft, setDraft] = useState(EMPTY_RULE);
+
+  // Natural-language policy rule generator
+  const [policyText, setPolicyText] = useState("");
+  const [policyJurisdiction, setPolicyJurisdiction] = useState("India / General Commercial");
+  const [generatingRules, setGeneratingRules] = useState(false);
+  const [generatedPreview, setGeneratedPreview] = useState(null);
 
   useEffect(() => {
     if (!token) return;
@@ -83,13 +90,39 @@ export default function Playbook() {
     await saveRules(next);
   };
 
+  const handleGenerateRules = async (e) => {
+    e.preventDefault();
+    if (policyText.trim().length < 10 || generatingRules) return;
+    setGeneratingRules(true);
+    setBanner(null);
+    try {
+      const res = await playbookApi.generateRules(token, {
+        policyText: policyText.trim(),
+        jurisdiction: policyJurisdiction.trim(),
+      });
+      setGeneratedPreview(res);
+    } catch (err) {
+      setBanner({ tone: "error", text: err.message });
+    } finally {
+      setGeneratingRules(false);
+    }
+  };
+
+  const appendGeneratedRules = async (rulesToAdd) => {
+    if (!rulesToAdd?.length) return;
+    const next = [...(playbook?.rules || []), ...rulesToAdd.map((r) => ({ ...r, enabled: true }))];
+    setGeneratedPreview(null);
+    setPolicyText("");
+    await saveRules(next);
+  };
+
   const evaluate = async (e) => {
     e.preventDefault();
     if (!selectedId) return;
     setEvaluating(true);
     setBanner(null);
     try {
-      setEvaluation(await playbookApi.evaluate(token, selectedId));
+      setEvaluation(await playbookApi.evaluate(token, selectedId, { useAiAudit: true }));
     } catch (err) {
       setBanner({ tone: "error", text: err.message });
     } finally {
@@ -104,7 +137,7 @@ export default function Playbook() {
       <div className="page-header">
         <div>
           <h1 className="page-heading">Legal Playbook &amp; Compliance</h1>
-          <p className="page-description">Load jurisdiction rule packs or define custom approval standards to audit agreements automatically.</p>
+          <p className="page-description">Load jurisdiction rule packs, generate rules from plain-English policy guidelines, and run hybrid AI compliance audits.</p>
         </div>
       </div>
 
@@ -113,18 +146,23 @@ export default function Playbook() {
       {presets.length > 0 && (
         <section className="surface-card settings-card">
           <div className="section-head-row">
-            <span className="section-eyebrow">Jurisdiction-Specific Legal Rule Packs</span>
-            <span className="mono-caption">One-click templates</span>
+            <span className="section-eyebrow">Jurisdiction-Specific Rule Packs</span>
+            <span className="mono-caption">One-click baseline standards</span>
           </div>
-          <StaggerContainer className="infra-grid" stagger={0.04}>
+          <StaggerContainer className="preset-grid" stagger={0.04}>
             {presets.map((p) => (
-              <StaggerItem key={p.id} className="infra-stat">
-                <strong>{p.label}</strong>
-                <span className="mono-caption">{p.jurisdiction} · {p.ruleCount} rules</span>
-                <p className="muted-caption" style={{ fontSize: 12, marginTop: 4 }}>{p.description}</p>
-                <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: "auto" }} disabled={saving} onClick={() => applyPreset(p.id)}>
-                  Load Pack
-                </button>
+              <StaggerItem key={p.id} className="preset-card">
+                <div className="section-head-row">
+                  <strong>{p.label}</strong>
+                  <span className="mono-tag">{p.ruleCount} rules</span>
+                </div>
+                <span className="mono-caption">{p.jurisdiction}</span>
+                <p className="muted-caption">{p.description}</p>
+                <div className="preset-card-foot">
+                  <button type="button" className="btn btn-secondary btn-sm" disabled={saving} onClick={() => applyPreset(p.id)}>
+                    Load Rule Pack
+                  </button>
+                </div>
               </StaggerItem>
             ))}
           </StaggerContainer>
@@ -133,7 +171,7 @@ export default function Playbook() {
 
       <section className="surface-card settings-card">
         <div className="section-head-row">
-          <span className="section-eyebrow"><ShieldCheckIcon size={14} /> Run Playbook Compliance Check</span>
+          <span className="section-eyebrow"><ShieldCheckIcon size={14} /> Run Hybrid AI Compliance Audit</span>
           {evaluation && (
             <span className={`risk-pill ${evaluation.compliance_score >= 80 ? "risk-low" : evaluation.compliance_score >= 50 ? "risk-medium" : "risk-high"}`}>
               {evaluation.compliance_score}% COMPLIANT
@@ -148,7 +186,7 @@ export default function Playbook() {
               {contracts.map((c) => <option key={c._id} value={c._id}>{c.title || c.fileName}</option>)}
             </select>
             <button type="submit" className="btn btn-primary" disabled={evaluating}>
-              <SparklesIcon size={15} /> {evaluating ? "Evaluating..." : "Evaluate Contract"}
+              <ShieldCheckIcon size={15} /> {evaluating ? "Auditing..." : "Evaluate Contract"}
             </button>
           </form>
         )}
@@ -157,7 +195,14 @@ export default function Playbook() {
           <div className="playbook-results">
             <div className="mono-caption">
               {evaluation.summary?.passed || 0} passed · {evaluation.summary?.warned || 0} warnings · {evaluation.summary?.failed || 0} failed
+              {evaluation.provider && ` · ${evaluation.provider}`}
             </div>
+            {evaluation.ai_audit_summary && (
+              <div className="brief-card">
+                <span className="brief-card-label">Executive Compliance Assessment</span>
+                <p className="summary-prose">{evaluation.ai_audit_summary}</p>
+              </div>
+            )}
             <div className="session-list">
               {(evaluation.results || []).map((r) => (
                 <div key={r.ruleId} className="session-row">
@@ -167,6 +212,7 @@ export default function Playbook() {
                         ? <CheckCircleIcon size={15} className="text-accent" />
                         : <AlertTriangleIcon size={15} className={r.status === "fail" ? "text-danger" : "text-warn"} />}
                       <strong>{r.name}</strong>
+                      {r.aiVerified && <span className="mono-tag">AI Verified</span>}
                     </div>
                     <span className="muted-caption">{r.detail}</span>
                     {r.status !== "pass" && r.remediation && (
@@ -184,6 +230,76 @@ export default function Playbook() {
             <p className="legal-disclaimer">Automated playbook checks flag potential rule deviations for review — not legal advice.</p>
           </div>
         )}
+      </section>
+
+      <section className="surface-card settings-card">
+        <div className="section-head-row">
+          <div>
+            <span className="section-eyebrow"><ScaleIcon size={14} /> Generate Rules from Policy Text</span>
+            <p className="muted-caption">Paste internal procurement or legal guidelines in plain English to create structured playbook checks automatically.</p>
+          </div>
+        </div>
+        <form onSubmit={handleGenerateRules} className="settings-form">
+          <div className="field">
+            <label htmlFor="policy-text" className="field-label">Company policy or review guidelines</label>
+            <textarea
+              id="policy-text"
+              className="text-input textarea-input"
+              rows={3}
+              value={policyText}
+              onChange={(e) => setPolicyText(e.target.value)}
+              placeholder="e.g., Every vendor agreement must include a Limitation of Liability cap and Confidentiality clause, give at least 30 days termination notice, forbid unlimited liability or silent auto-renewal, and be governed by Indian or Delaware law."
+              disabled={generatingRules}
+            />
+          </div>
+          <div className="settings-form-foot">
+            <input
+              className="text-input input-sm"
+              style={{ maxWidth: 280 }}
+              value={policyJurisdiction}
+              onChange={(e) => setPolicyJurisdiction(e.target.value)}
+              placeholder="Jurisdiction context"
+              aria-label="Jurisdiction context"
+              disabled={generatingRules}
+            />
+            <button type="submit" className="btn btn-primary btn-sm" disabled={generatingRules || policyText.trim().length < 10}>
+              {generatingRules ? "Generating rules..." : "Generate Structured Rules"}
+            </button>
+          </div>
+        </form>
+
+        <AnimatePresence>
+          {generatedPreview?.rules?.length > 0 && (
+            <ExpandableSection className="drafted-missing-box">
+              <div className="section-head-row">
+                <div>
+                  <span className="section-eyebrow">Proposed Rules ({generatedPreview.rules.length})</span>
+                  {generatedPreview.summary && <p className="muted-caption">{generatedPreview.summary}</p>}
+                </div>
+                <div className="row-actions">
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setGeneratedPreview(null)}>Dismiss</button>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => appendGeneratedRules(generatedPreview.rules)} disabled={saving}>
+                    <PlusIcon size={14} /> Add All to Playbook
+                  </button>
+                </div>
+              </div>
+              <div className="session-list">
+                {generatedPreview.rules.map((r, i) => (
+                  <div key={i} className="session-row">
+                    <div className="session-info">
+                      <div className="session-title-line">
+                        <strong>{r.name}</strong>
+                        <span className={`risk-pill risk-${r.severity || "medium"}`}>{(r.severity || "medium").toUpperCase()}</span>
+                      </div>
+                      <span className="mono-caption">{RULE_LABELS[r.ruleType] || r.ruleType}: {r.target}</span>
+                      {r.guidance && <span className="muted-caption">{r.guidance}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ExpandableSection>
+          )}
+        </AnimatePresence>
       </section>
 
       <section className="surface-card settings-card">

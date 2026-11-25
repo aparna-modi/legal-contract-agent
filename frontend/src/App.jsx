@@ -1,23 +1,24 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { useAuth } from "./context/AuthContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import LibrarySearchModal from "./components/LibrarySearchModal";
-import { BrandMark, LogOutIcon, SearchIcon, ShieldCheckIcon } from "./components/Icons";
-import { SPRING_SNAPPY } from "./components/motionTokens";
+import { BrandMark, LogOutIcon, MenuIcon, SearchIcon, XIcon } from "./components/Icons";
+import { EASE_EDITORIAL, SPRING_SNAPPY } from "./components/motionTokens";
 import Dashboard from "./pages/Dashboard";
-import UploadScreen from "./pages/UploadScreen";
-import DraftContract from "./pages/DraftContract";
-import Compare from "./pages/Compare";
-import Playbook from "./pages/Playbook";
-import Analytics from "./pages/Analytics";
-import SecuritySettings from "./pages/SecuritySettings";
-import AdminDashboard from "./pages/AdminDashboard";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
-import ForgotPassword from "./pages/ForgotPassword";
-import ResetPassword from "./pages/ResetPassword";
+
+const UploadScreen = lazy(() => import("./pages/UploadScreen"));
+const DraftContract = lazy(() => import("./pages/DraftContract"));
+const Compare = lazy(() => import("./pages/Compare"));
+const Playbook = lazy(() => import("./pages/Playbook"));
+const Analytics = lazy(() => import("./pages/Analytics"));
+const SecuritySettings = lazy(() => import("./pages/SecuritySettings"));
+const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
+const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
 
 const NAV_LINKS = [
   { to: "/", label: "Workspace", end: true },
@@ -51,6 +52,7 @@ export default function App() {
   const location = useLocation();
   const { user, token, logout, isAuthenticated } = useAuth();
   const [searchOpen, setSearchOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -72,6 +74,7 @@ export default function App() {
     .join("");
 
   const handleLogout = async () => {
+    setMobileNavOpen(false);
     await logout();
     navigate("/login");
   };
@@ -86,7 +89,7 @@ export default function App() {
           <header className="topbar">
             <div className="topbar-inner">
               <div className="topbar-left">
-                <NavLink to="/" className="brand">
+                <NavLink to="/" className="brand" onClick={() => setMobileNavOpen(false)}>
                   <BrandMark size={26} />
                   <span className="brand-name">Legal Contract Agent</span>
                 </NavLink>
@@ -126,7 +129,7 @@ export default function App() {
                       type="button"
                       className="cmd-trigger-btn"
                       onClick={() => setSearchOpen(true)}
-                      title="Search contracts (Ctrl+K)"
+                      title="Search across contracts (Ctrl+K)"
                     >
                       <SearchIcon size={14} />
                       <span>Search</span>
@@ -140,12 +143,21 @@ export default function App() {
                     >
                       <span className="avatar-initials">{initials}</span>
                       <span className="account-name">{user?.name || "Account"}</span>
-                      <ShieldCheckIcon size={14} className="text-accent" />
                     </NavLink>
 
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={handleLogout}>
-                      <LogOutIcon size={15} />
+                    <button type="button" className="btn btn-ghost btn-sm desktop-signout" onClick={handleLogout}>
+                      <LogOutIcon size={14} />
                       <span>Sign out</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="icon-btn mobile-menu-btn"
+                      onClick={() => setMobileNavOpen((v) => !v)}
+                      aria-label={mobileNavOpen ? "Close menu" : "Open menu"}
+                      aria-expanded={mobileNavOpen}
+                    >
+                      {mobileNavOpen ? <XIcon size={18} /> : <MenuIcon size={18} />}
                     </button>
                   </div>
                 ) : (
@@ -156,40 +168,84 @@ export default function App() {
                 )}
               </div>
             </div>
+
+            <AnimatePresence>
+              {isAuthenticated && mobileNavOpen && (
+                <motion.nav
+                  className="mobile-nav-drawer"
+                  aria-label="Mobile Navigation"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.22, ease: EASE_EDITORIAL }}
+                >
+                  <div className="mobile-nav-links">
+                    {navItems.map((item) => (
+                      <NavLink
+                        key={item.to}
+                        to={item.to}
+                        end={item.end}
+                        className={({ isActive }) => `mobile-nav-item ${isActive ? "active" : ""}`}
+                        onClick={() => setMobileNavOpen(false)}
+                      >
+                        {item.label}
+                      </NavLink>
+                    ))}
+                    <div className="mobile-nav-actions">
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          setMobileNavOpen(false);
+                          setSearchOpen(true);
+                        }}
+                      >
+                        <SearchIcon size={14} /> Search Library
+                      </button>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={handleLogout}>
+                        <LogOutIcon size={14} /> Sign out
+                      </button>
+                    </div>
+                  </div>
+                </motion.nav>
+              )}
+            </AnimatePresence>
           </header>
 
           <main id="main-content" className="main-content" tabIndex={-1}>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/upload" element={<ProtectedRoute><UploadScreen /></ProtectedRoute>} />
-              <Route path="/draft" element={<ProtectedRoute><DraftContract /></ProtectedRoute>} />
-              <Route path="/compare" element={<ProtectedRoute><Compare /></ProtectedRoute>} />
-              <Route path="/playbook" element={<ProtectedRoute><Playbook /></ProtectedRoute>} />
-              <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
-              <Route path="/security" element={<ProtectedRoute><SecuritySettings /></ProtectedRoute>} />
-              <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
-              <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <Login />} />
-              <Route path="/register" element={isAuthenticated ? <Navigate to="/" replace /> : <Register />} />
-              <Route path="/forgot-password" element={<ForgotPassword />} />
-              <Route path="/reset-password" element={<ResetPassword />} />
-              <Route
-                path="*"
-                element={
-                  <div className="surface-card empty-box centered-card">
-                    <span className="mono-tag">404</span>
-                    <h3>Page not found</h3>
-                    <p>The requested page does not exist.</p>
-                    <Link to="/" className="btn btn-primary">Back to Workspace</Link>
-                  </div>
-                }
-              />
-            </Routes>
+            <Suspense fallback={<div className="state-box"><div className="spinner" /><p>Loading workspace view...</p></div>}>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/upload" element={<ProtectedRoute><UploadScreen /></ProtectedRoute>} />
+                <Route path="/draft" element={<ProtectedRoute><DraftContract /></ProtectedRoute>} />
+                <Route path="/compare" element={<ProtectedRoute><Compare /></ProtectedRoute>} />
+                <Route path="/playbook" element={<ProtectedRoute><Playbook /></ProtectedRoute>} />
+                <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
+                <Route path="/security" element={<ProtectedRoute><SecuritySettings /></ProtectedRoute>} />
+                <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
+                <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <Login />} />
+                <Route path="/register" element={isAuthenticated ? <Navigate to="/" replace /> : <Register />} />
+                <Route path="/forgot-password" element={<ForgotPassword />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
+                <Route
+                  path="*"
+                  element={
+                    <div className="surface-card empty-box centered-card">
+                      <span className="mono-tag">404</span>
+                      <h3>Page not found</h3>
+                      <p>The requested page does not exist.</p>
+                      <Link to="/" className="btn btn-primary">Back to Workspace</Link>
+                    </div>
+                  }
+                />
+              </Routes>
+            </Suspense>
           </main>
 
           <footer className="app-footer">
             <div className="app-footer-inner">
-              <span>Legal Contract Agent — Document-grounded contract review workspace.</span>
-              <span>Informational first-pass review only; not legal advice.</span>
+              <span>Legal Contract Agent — Document-grounded contract review workspace</span>
+              <span>Informational first-pass review only · Not legal advice</span>
             </div>
           </footer>
 

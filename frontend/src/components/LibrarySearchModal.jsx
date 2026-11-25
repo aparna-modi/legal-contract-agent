@@ -84,7 +84,7 @@ export default function LibrarySearchModal({ initialQuery, token, onClose }) {
           <div>
             <h2>Library Semantic Search</h2>
             <p className="muted-caption">
-              Search clauses across all analyzed contracts in your account
+              Query clauses across every analyzed agreement in your workspace
             </p>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
@@ -130,7 +130,7 @@ export default function LibrarySearchModal({ initialQuery, token, onClose }) {
               {response.insufficient_information ? (
                 <div className="qa-refusal-box">
                   <div className="qa-refusal-head">
-                    <AlertTriangleIcon size={16} />
+                    <AlertTriangleIcon size={15} />
                     <strong>No strong matches across your library</strong>
                   </div>
                   <p>{response.answer || response.message}</p>
@@ -139,7 +139,7 @@ export default function LibrarySearchModal({ initialQuery, token, onClose }) {
                 <div className="qa-answer-box">
                   <div className="qa-answer-top">
                     <span className="qa-answer-label">
-                      <CheckCircleIcon size={15} />
+                      <CheckCircleIcon size={14} />
                       Synthesized Finding
                     </span>
                     {response.confidence && (
@@ -155,6 +155,18 @@ export default function LibrarySearchModal({ initialQuery, token, onClose }) {
                       <div className="citation-row">
                         {response.indian_law_refs.map((law, idx) => (
                           <span key={idx} className="law-ref-pill">{law}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {response.suggested_followups?.length > 0 && (
+                    <div className="followup-row">
+                      <span className="chip-prefix">Related queries</span>
+                      <div className="prompt-chips">
+                        {response.suggested_followups.map((fq, idx) => (
+                          <button key={idx} type="button" className="chip-btn" onClick={() => runSearch(fq)}>
+                            {fq}
+                          </button>
                         ))}
                       </div>
                     </div>
