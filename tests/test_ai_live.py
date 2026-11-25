@@ -234,18 +234,42 @@ class LiveAITester:
             "Critical",
         )
 
-        # Obligations & Deadlines extraction check
+        # Obligations & Deadlines + Negotiation Brief extraction check
         obligations = doc.get("keyFacts", {}).get("obligationsAndDeadlines", [])
+        brief = doc.get("negotiationBrief", {})
         self.record(
-            "Obligations & Deadlines",
+            "Obligations & Negotiation Brief",
             "POST /api/contracts/:id/extract",
-            "Structured party obligations & deadlines extracted",
-            "obligationsAndDeadlines non-empty with party/deadline",
-            f"count={len(obligations)}",
-            len(obligations) >= 1 and all(ob.get("obligation") for ob in obligations),
+            "Structured party obligations & negotiation verdict extracted",
+            "obligations non-empty + negotiationBrief.verdict populated",
+            f"obligations={len(obligations)}, verdict={brief.get('verdict')!r}",
+            len(obligations) >= 1 and bool(brief.get("verdict")),
             ex_ms,
             "High",
         )
+
+        # Draft Missing Clause check
+        first_missing = (doc.get("missingClauses") or [None])[0]
+        if first_missing:
+            t0 = time.perf_counter()
+            mc_res = self.client.post(
+                f"/api/contracts/{cid}/draft-missing-clause",
+                headers=self._auth_headers(),
+                json={"clauseType": first_missing["clauseType"], "reason": first_missing.get("reason", "")},
+            )
+            mc_ms = round((time.perf_counter() - t0) * 1000)
+            mc_json = mc_res.json() if mc_res.status_code == 200 else {}
+            ok_mc = mc_res.status_code == 200 and len(mc_json.get("suggested_clause_text", "")) >= 60 and "not legal advice" in str(mc_json.get("disclaimer", "")).lower()
+            self.record(
+                "Draft Missing Clause",
+                "POST /api/contracts/:id/draft-missing-clause",
+                f"Draft missing {first_missing['clauseType']} clause",
+                "HTTP 200 + ready-to-insert clause + disclaimer",
+                f"HTTP {mc_res.status_code}, chars={len(mc_json.get('suggested_clause_text', ''))}",
+                ok_mc,
+                mc_ms,
+                "High",
+            )
 
         # Q&A Accuracy check
         t0 = time.perf_counter()
@@ -317,22 +341,33 @@ class LiveAITester:
             "Critical",
         )
 
-        # Redline suggestion on first high-risk clause
+        # Redline suggestion on first high-risk clause (stance-aware + Tier-2 fallback)
         high_clause = next((c for c in clauses if c.get("riskLevel") == "high"), clauses[0] if clauses else None)
         if high_clause:
             t0 = time.perf_counter()
             rl = self.client.post(
                 f"/api/contracts/{cid}/clauses/{high_clause['_id']}/suggest-redline",
                 headers=self._auth_headers(),
+                json={"stance": "client_favorable", "customInstruction": "Cap liability at 12 months fees"},
             )
             rl_ms = round((time.perf_counter() - t0) * 1000)
             rl_json = rl.json() if rl.status_code == 200 else {}
             ok_rl = rl.status_code == 200 and bool(rl_json.get("suggested_text")) and "not legal advice" in str(rl_json.get("disclaimer", "")).lower()
-            self.record("Redline Suggestion", "POST /api/contracts/:id/clauses/:cid/suggest-redline", "Draft fallback for high-risk clause", "HTTP 200 + suggested_text + disclaimer", f"HTTP {rl.status_code}, len={len(rl_json.get('suggested_text', ''))}", ok_rl, rl_ms, "High")
+            self.record("Redline Suggestion", "POST /api/contracts/:id/clauses/:cid/suggest-redline", "Draft client-favorable redline + Tier-2 fallback", "HTTP 200 + suggested_text + disclaimer", f"HTTP {rl.status_code}, len={len(rl_json.get('suggested_text', ''))}, tier2={bool(rl_json.get('fallback_compromise'))}", ok_rl, rl_ms, "High")
 
-        # Playbook evaluation
+        # Playbook AI policy-to-rules generator + hybrid evaluation
         t0 = time.perf_counter()
-        pb = self.client.post(f"/api/playbook/evaluate/{cid}", headers=self._auth_headers())
+        gen_pb = self.client.post(
+            "/api/playbook/generate-rules",
+            headers=self._auth_headers(),
+            json={"policyText": "Require Limitation of Liability and Confidentiality clauses, forbid unlimited liability, minimum 30 days notice.", "jurisdiction": "India"},
+        )
+        gen_ms = round((time.perf_counter() - t0) * 1000)
+        gen_json = gen_pb.json() if gen_pb.status_code == 200 else {}
+        self.record("Playbook Rule Generator", "POST /api/playbook/generate-rules", "Generate structured rules from natural-language policy", "HTTP 200, >=2 structured rules", f"HTTP {gen_pb.status_code}, rules={len(gen_json.get('rules', []))}", gen_pb.status_code == 200 and len(gen_json.get("rules", [])) >= 2, gen_ms, "High")
+
+        t0 = time.perf_counter()
+        pb = self.client.post(f"/api/playbook/evaluate/{cid}", headers=self._auth_headers(), json={"useAiAudit": True})
         pb_ms = round((time.perf_counter() - t0) * 1000)
         pb_json = pb.json() if pb.status_code == 200 else {}
         failed_rules = [r for r in pb_json.get("results", []) if r.get("status") != "pass"]
@@ -469,6 +504,34 @@ class LiveAITester:
         )
 
         if ok_dr:
+            t0 = time.perf_counter()
+            rev_res = self.client.post(
+                "/api/contracts/draft/revise",
+                headers=self._auth_headers(),
+                json={
+                    "title": dr_json.get("title") or "Cloud Engineering MSA",
+                    "currentText": full_text,
+                    "instruction": "Add a 72-hour data breach notification clause and set arbitration seat in Bengaluru.",
+                    "jurisdiction": "India (Indian Contract Act, 1872)",
+                },
+            )
+            rev_ms = round((time.perf_counter() - t0) * 1000)
+            rev_json = rev_res.json() if rev_res.status_code == 200 else {}
+            revised_text = rev_json.get("full_text", "")
+            ok_rev = rev_res.status_code == 200 and len(revised_text) >= 400 and len(rev_json.get("changes_made", [])) >= 1
+            self.record(
+                "Contract Drafting (AI Revision)",
+                "POST /api/contracts/draft/revise",
+                "Iteratively revise generated MSA draft",
+                "HTTP 200 + updated draft + changes_made",
+                f"HTTP {rev_res.status_code}, chars={len(revised_text)}, changes={len(rev_json.get('changes_made', []))}",
+                ok_rev,
+                rev_ms,
+                "High",
+            )
+            if ok_rev:
+                full_text = revised_text
+
             t0 = time.perf_counter()
             sv_res = self.client.post(
                 "/api/contracts/draft/save",

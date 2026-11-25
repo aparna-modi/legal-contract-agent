@@ -147,3 +147,49 @@ def test_prometheus_metrics_endpoint():
     assert res.status_code == 200
     assert "ai_http_requests_total" in res.text
     assert "ai_vector_store_total" in res.text
+
+
+def test_draft_missing_clause_and_revise_draft_and_policy_rules(monkeypatch):
+    monkeypatch.setattr(llm_client, "generate_structured", lambda **kwargs: None)
+
+    mc = client.post(
+        "/api/v1/draft-clause",
+        json={
+            "clause_type": "Limitation of Liability",
+            "document_name": "Acme MSA",
+            "parties": ["Acme Corp", "Beta LLC"],
+            "jurisdiction": "India (Indian Contract Act, 1872)",
+            "reason": "No liability cap present.",
+        },
+    )
+    assert mc.status_code == 200
+    mc_body = mc.json()
+    assert "twelve (12) months" in mc_body["suggested_clause_text"]
+    assert "not legal advice" in mc_body["disclaimer"].lower()
+
+    rev = client.post(
+        "/api/v1/draft/revise",
+        json={
+            "title": "Acme MSA",
+            "current_text": "1. SCOPE\nProvider shall deliver software engineering services to Client under this Agreement.",
+            "instruction": "Add a 60-day source code escrow obligation.",
+            "jurisdiction": "India",
+        },
+    )
+    assert rev.status_code == 200
+    rev_body = rev.json()
+    assert "escrow" in rev_body["full_text"].lower()
+    assert len(rev_body["changes_made"]) >= 1
+
+    gen = client.post(
+        "/api/v1/playbook/generate-rules",
+        json={
+            "policy_text": "Every agreement must cap liability, forbid unlimited liability and auto-renew, and include at least 30 days notice.",
+            "jurisdiction": "India, Delaware",
+        },
+    )
+    assert gen.status_code == 200
+    gen_body = gen.json()
+    assert len(gen_body["rules"]) >= 3
+    assert all(r["ruleType"] in {"require_clause", "forbidden_keyword", "min_notice_days", "allowed_jurisdiction", "max_high_risk"} for r in gen_body["rules"])
+
