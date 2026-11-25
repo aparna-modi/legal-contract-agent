@@ -1,51 +1,204 @@
 import io
 import re
+from collections import Counter
 from typing import Any, Dict, List, Optional
+
 import pypdf
 
 from extractors.base import BaseDocumentExtractor, DocumentChunk, ExtractionResult
-from extractors.utils import clean_text, count_tokens, is_heading
+from extractors.utils import clean_text, count_tokens, extract_clause_number, is_heading
 from services.llm_client import llm_client
 
-_PAGE_HEADER_RE = re.compile(r"^(?:page\s+\d+(?:\s+of\s+\d+)?|[-–—\s]*\d+[-–—\s]*)$", re.IGNORECASE)
+_PAGE_MARKER_RE = re.compile(r"^(?:page\s+\d+(?:\s+of\s+\d+)?|[-–—\s]*\d+[-–—\s]*)$", re.IGNORECASE)
+_SIGNATURE_LINE_RE = re.compile(r"^[_=\-]{4,}$")
+_MAX_CHUNK_TOKENS = 520
 
 
 class PDFDocumentExtractor(BaseDocumentExtractor):
-    """Extracts PDF text with per-page section/clause splitting and Gemini OCR fallback."""
+    """Extracts PDF text page-by-page with section/clause splitting and Gemini OCR fallback."""
 
-    def _split_page_into_sections(self, page_text: str) -> List[tuple[Optional[str], str]]:
-        """Split a page into logical sections/clauses even when pypdf emits single newlines."""
+    @staticmethod
+    def _find_repeating_headers_footers(page_texts: List[str]) -> set[str]:
+        """Identify short running headers or footers repeated across multiple pages."""
+        if len(page_texts) < 2:
+            return set()
+
+        edge_counts: Counter[str] = Counter()
+        for raw_page in page_texts:
+            lines = [ln.strip() for ln in clean_text(raw_page or "").splitlines() if ln.strip()]
+            if not lines:
+                continue
+            candidates = set()
+            for edge_line in lines[:2] + lines[-2:]:
+                if 3 <= len(edge_line) <= 90 and not _PAGE_MARKER_RE.match(edge_line):
+                    candidates.add(edge_line.lower())
+            for item in candidates:
+                edge_counts[item] += 1
+
+        threshold = max(2, len(page_texts) // 2)
+        return {line for line, count in edge_counts.items() if count >= threshold}
+
+    @staticmethod
+    def _split_oversized_block(text: str, max_tokens: int = _MAX_CHUNK_TOKENS) -> List[str]:
+        """Break very large uninterrupted blocks along sentence boundaries."""
+        if count_tokens(text) <= max_tokens:
+            return [text]
+
+        sentences = re.split(r"(?<=[.;!?])\s+(?=[A-Z0-9(\[])", text)
+        parts: List[str] = []
+        current: List[str] = []
+        current_tokens = 0
+
+        for sentence in sentences:
+            s_tokens = count_tokens(sentence)
+            if current and current_tokens + s_tokens > max_tokens:
+                parts.append(" ".join(current).strip())
+                current = [sentence]
+                current_tokens = s_tokens
+            else:
+                current.append(sentence)
+                current_tokens += s_tokens
+
+        if current:
+            parts.append(" ".join(current).strip())
+        return [p for p in parts if p]
+
+    def _split_page_into_blocks(
+        self,
+        page_text: str,
+        repeating_edges: set[str],
+        inherited_section: Optional[str],
+    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
+        """
+        Split a single PDF page into clean clause blocks while tracking the active
+        section heading and numbered sub-clauses (e.g. 1.1, 2.2, 9.1).
+        """
         if "\n\n" in page_text:
             raw_blocks = [b.strip() for b in page_text.split("\n\n") if b.strip()]
             if len(raw_blocks) > 1:
-                out: List[tuple[Optional[str], str]] = []
+                blocks: List[Dict[str, Any]] = []
+                active_section = inherited_section
                 for blk in raw_blocks:
-                    first = blk.split("\n", 1)[0].strip()
-                    out.append((first if is_heading(first) else None, blk))
-                return out
+                    cleaned_lines = [
+                        ln.strip()
+                        for ln in blk.splitlines()
+                        if ln.strip()
+                        and not _PAGE_MARKER_RE.match(ln.strip())
+                        and ln.strip().lower() not in repeating_edges
+                    ]
+                    if not cleaned_lines:
+                        continue
+                    text = "\n".join(cleaned_lines)
+                    first_line = cleaned_lines[0]
+                    clause_num = extract_clause_number(first_line)
+                    detected_head = first_line if is_heading(first_line) else None
+                    if detected_head:
+                        active_section = detected_head
+                    blocks.append({
+                        "text": text,
+                        "heading": active_section,
+                        "detected_heading": detected_head,
+                        "clause_number": clause_num or "",
+                    })
+                return blocks, active_section
 
-        lines = [ln.rstrip() for ln in page_text.splitlines()]
-        sections: List[tuple[Optional[str], List[str]]] = []
-        cur_heading: Optional[str] = None
+        raw_lines = [ln.strip() for ln in page_text.splitlines()]
+        lines = [
+            ln for ln in raw_lines
+            if ln and not _PAGE_MARKER_RE.match(ln) and ln.lower() not in repeating_edges
+        ]
+        if not lines:
+            return [], inherited_section
+
+        blocks = []
+        active_section = inherited_section
+        pending_heading: Optional[str] = None
         cur_lines: List[str] = []
+        cur_clause_num = ""
 
-        for raw_line in lines:
-            stripped = raw_line.strip()
-            if not stripped or _PAGE_HEADER_RE.match(stripped):
+        def flush() -> None:
+            nonlocal cur_lines, cur_clause_num, pending_heading
+            if not cur_lines:
+                return
+            joined = "\n".join(cur_lines).strip()
+            if joined:
+                for piece in self._split_oversized_block(joined):
+                    blocks.append({
+                        "text": piece,
+                        "heading": active_section,
+                        "detected_heading": pending_heading,
+                        "clause_number": cur_clause_num,
+                    })
+            cur_lines = []
+            cur_clause_num = ""
+            pending_heading = None
+
+        for idx, line in enumerate(lines):
+            clause_num = extract_clause_number(line)
+            line_is_heading = is_heading(line)
+
+            # Merge wrapped ALL-CAPS title continuation (e.g. "...APARTMENT" + "PROPERTY").
+            if (
+                line_is_heading
+                and not clause_num
+                and not cur_lines
+                and blocks
+                and blocks[-1].get("is_standalone_heading")
+                and line == line.upper()
+                and blocks[-1]["text"] == blocks[-1]["text"].upper()
+                and len(line.split()) <= 3
+                and not re.match(r"^(?:BETWEEN|WHEREAS|SCHEDULE|ARTICLE|SECTION|CLAUSE|VENDOR|PURCHASER|WITNESSES)\b", line, re.I)
+            ):
+                merged = f"{blocks[-1]['text']} {line}"
+                blocks[-1]["text"] = merged
+                blocks[-1]["heading"] = merged
+                blocks[-1]["detected_heading"] = merged
+                active_section = merged
                 continue
 
-            if is_heading(stripped):
-                if cur_lines:
-                    sections.append((cur_heading, cur_lines))
-                cur_heading = stripped
-                cur_lines = [stripped]
-            else:
-                cur_lines.append(stripped)
+            # A numbered sub-clause starts a fresh clause block under the current section.
+            if clause_num:
+                flush()
+                if line_is_heading:
+                    # Short sub-heading such as "9.1 Default by Purchaser:"
+                    cur_clause_num = clause_num
+                    cur_lines = [line]
+                    pending_heading = line
+                else:
+                    cur_clause_num = clause_num
+                    cur_lines = [line]
+                continue
 
-        if cur_lines:
-            sections.append((cur_heading, cur_lines))
+            if line_is_heading:
+                flush()
+                active_section = line
+                pending_heading = line
+                # If the very next line is also a heading or a numbered sub-clause,
+                # emit this standalone section title as a heading chunk only when needed
+                # or let it stay attached to the following paragraph.
+                next_line = lines[idx + 1] if idx + 1 < len(lines) else ""
+                if not next_line or extract_clause_number(next_line) or is_heading(next_line):
+                    # Preserve standalone section title so headings and section counts stay accurate.
+                    blocks.append({
+                        "text": line,
+                        "heading": active_section,
+                        "detected_heading": line,
+                        "clause_number": "",
+                        "is_standalone_heading": True,
+                    })
+                    pending_heading = None
+                else:
+                    cur_lines = [line]
+                continue
 
-        return [(h, "\n".join(ls).strip()) for h, ls in sections if ls]
+            if _SIGNATURE_LINE_RE.match(line) and cur_lines:
+                cur_lines.append(line)
+                continue
+
+            cur_lines.append(line)
+
+        flush()
+        return blocks, active_section
 
     def _chunks_from_page_texts(self, page_texts: List[str]) -> tuple[List[DocumentChunk], str, set[str]]:
         chunks: List[DocumentChunk] = []
@@ -54,6 +207,7 @@ class PDFDocumentExtractor(BaseDocumentExtractor):
         chunk_id = 1
         current_section: Optional[str] = None
         unique_sections: set[str] = set()
+        repeating_edges = self._find_repeating_headers_footers(page_texts)
 
         for page_idx, raw_page in enumerate(page_texts):
             page_number = page_idx + 1
@@ -61,18 +215,31 @@ class PDFDocumentExtractor(BaseDocumentExtractor):
             if not page_text:
                 continue
 
-            for detected_heading, block in self._split_page_into_sections(page_text):
+            page_blocks, current_section = self._split_page_into_blocks(
+                page_text, repeating_edges, current_section
+            )
+            for item in page_blocks:
+                block = item["text"]
                 if not block:
                     continue
+
                 lines = [ln.strip() for ln in block.split("\n") if ln.strip()]
                 first_line = lines[0] if lines else ""
+                heading = item.get("heading") or current_section
+                detected_heading = item.get("detected_heading")
+                clause_number = item.get("clause_number") or ""
 
                 if detected_heading:
-                    current_section = detected_heading
-                    unique_sections.add(current_section)
+                    unique_sections.add(detected_heading)
+
+                if item.get("is_standalone_heading"):
+                    chunk_type = "heading"
+                elif clause_number:
+                    chunk_type = "clause"
+                elif detected_heading:
                     chunk_type = "heading" if len(lines) == 1 else "clause"
-                elif page_number == 1 and not current_section:
-                    current_section = "Preamble & Parties"
+                elif page_number == 1 and not heading:
+                    heading = "Preamble & Parties"
                     chunk_type = "clause"
                 else:
                     chunk_type = "paragraph"
@@ -90,7 +257,7 @@ class PDFDocumentExtractor(BaseDocumentExtractor):
                         chunk_id=chunk_id,
                         text=block,
                         page_number=page_number,
-                        section_heading=current_section,
+                        section_heading=heading or "General",
                         start_char=start_char,
                         end_char=offset,
                         token_count=count_tokens(block),
@@ -98,7 +265,8 @@ class PDFDocumentExtractor(BaseDocumentExtractor):
                         metadata={
                             "page_number": page_number,
                             "line_count": len(lines),
-                            "is_heading": bool(detected_heading or is_heading(first_line)),
+                            "clause_number": clause_number,
+                            "is_heading": bool(item.get("is_standalone_heading") or (detected_heading and len(lines) == 1)),
                         },
                     )
                 )
@@ -109,11 +277,11 @@ class PDFDocumentExtractor(BaseDocumentExtractor):
     def extract_from_bytes(self, content: bytes, filename: str) -> ExtractionResult:
         try:
             reader = pypdf.PdfReader(io.BytesIO(content))
-        except Exception as e:
-            raise ValueError(f"Failed to parse PDF document '{filename}': {str(e)}")
+        except Exception as exc:
+            raise ValueError(f"Failed to parse PDF document '{filename}': {exc}")
 
         total_pages = len(reader.pages)
-        page_texts = []
+        page_texts: List[str] = []
         for page in reader.pages:
             try:
                 page_texts.append(page.extract_text() or "")
@@ -140,9 +308,9 @@ class PDFDocumentExtractor(BaseDocumentExtractor):
         }
         if reader.metadata:
             try:
-                for k, v in reader.metadata.items():
-                    if isinstance(v, (str, int, float, bool)):
-                        metadata[k.lstrip("/")] = v
+                for key, val in reader.metadata.items():
+                    if isinstance(val, (str, int, float, bool)):
+                        metadata[key.lstrip("/")] = val
             except Exception:
                 pass
 

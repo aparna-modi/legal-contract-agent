@@ -27,6 +27,10 @@ const questionAnswerSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    indianLawRefs: {
+      type: [String],
+      default: [],
+    },
     confidence: {
       type: String,
       enum: ["HIGH", "MEDIUM", "LOW", "NONE"],

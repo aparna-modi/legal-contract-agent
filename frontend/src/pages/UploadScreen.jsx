@@ -26,6 +26,8 @@ export default function UploadScreen() {
   const [dragging, setDragging] = useState(false);
   const [step, setStep] = useState(0);
   const [percent, setPercent] = useState(0);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [uploadedId, setUploadedId] = useState(null);
   const [feedback, setFeedback] = useState(null);
 
   const selectFile = (selected) => {
@@ -39,18 +41,20 @@ export default function UploadScreen() {
     }
     setFile(selected);
     setFeedback(null);
+    setUploadedId(null);
     if (!title.trim()) setTitle(selected.name.replace(/\.[^/.]+$/, ""));
   };
 
   const pollJob = async (jobId) => {
-    for (let i = 0; i < 60; i++) {
-      await new Promise((r) => setTimeout(r, 900));
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
       const { job } = await contractsApi.jobStatus(token, jobId);
       setPercent(job.percent || 0);
+      if (job.message) setStatusMessage(job.message);
       if (job.status === "completed") return job;
       if (job.status === "failed") throw new Error(job.error || "Background analysis failed.");
     }
-    throw new Error("Analysis is still running in the background. Check Workspace shortly.");
+    throw new Error("Analysis is still running in the background. Open Workspace to check progress.");
   };
 
   const handleSubmit = async (e) => {
@@ -58,6 +62,8 @@ export default function UploadScreen() {
     if (!file) return setFeedback({ tone: "error", text: "Select a contract file first." });
 
     setFeedback(null);
+    setUploadedId(null);
+    setStatusMessage("");
     setStep(1);
     setPercent(10);
 
@@ -69,6 +75,7 @@ export default function UploadScreen() {
     try {
       setStep(2);
       const { document: doc } = await contractsApi.upload(token, form);
+      setUploadedId(doc?._id || null);
       setPercent(30);
       if (autoAnalyze && doc?._id) {
         setStep(3);
@@ -102,7 +109,16 @@ export default function UploadScreen() {
       </div>
 
       <form onSubmit={handleSubmit} className="surface-card upload-form">
-        {feedback && <div className={`alert alert-${feedback.tone}`}>{feedback.text}</div>}
+        {feedback && (
+          <div className={`alert alert-${feedback.tone}`}>
+            <span>{feedback.text}</span>
+            {feedback.tone === "error" && uploadedId && (
+              <div style={{ marginTop: 6 }}>
+                <Link to="/" className="inline-link">Your file was saved — open Workspace to retry analysis →</Link>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="field">
           <label htmlFor="contract-title" className="field-label">Contract Title <span className="field-optional">(optional)</span></label>
@@ -174,6 +190,7 @@ export default function UploadScreen() {
                 </div>
               );
             })}
+            {statusMessage && <span className="mono-caption" style={{ marginTop: 4 }}>{statusMessage}</span>}
           </div>
         )}
 

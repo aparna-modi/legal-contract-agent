@@ -1,16 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { contractsApi, feedbackApi, playbookApi } from "../api/client";
+import { useAuth } from "../context/AuthContext";
+import FormattedText from "./FormattedText";
 import {
   AlertTriangleIcon, CheckCircleIcon, CheckIcon, ClockIcon, CopyIcon, DownloadIcon,
-  FileTextIcon, MessageIcon, PrinterIcon, SearchIcon, SendIcon, ShieldAlertIcon,
-  ShieldCheckIcon, SparklesIcon, ThumbsDownIcon, ThumbsUpIcon, XIcon,
+  FileTextIcon, MessageIcon, PrinterIcon, RefreshIcon, SearchIcon, SendIcon,
+  ShieldAlertIcon, ShieldCheckIcon, SparklesIcon, ThumbsDownIcon, ThumbsUpIcon, XIcon,
 } from "./Icons";
 
 const SAMPLE_QUESTIONS = [
   "Who are the parties and what are their roles?",
+  "What are the payment schedule, deposits, and deadlines?",
   "What happens if either party terminates or defaults?",
   "Which Indian laws, courts, or arbitration rules apply?",
-  "What are the payment schedule, deposits, and deadlines?",
+  "Summarize the main obligations and risks in this contract.",
 ];
 
 const esc = (v) =>
@@ -54,11 +57,25 @@ function printReport(contract, clauses) {
   setTimeout(() => win.print(), 250);
 }
 
-export default function ContractDrawer({ contract, initialTab = "overview", token, onClose }) {
+export default function ContractDrawer({
+  contract: initialContract,
+  initialTab = "overview",
+  token,
+  onClose,
+  onContractUpdated,
+}) {
+  const { user } = useAuth();
+  const [contractOverride, setContractOverride] = useState(null);
+  const contract =
+    contractOverride && contractOverride._id === initialContract?._id
+      ? contractOverride
+      : initialContract;
   const [tab, setTab] = useState(initialTab);
   const [clauses, setClauses] = useState([]);
-  const [loading, setLoading] = useState(Boolean(contract && token));
+  const [loading, setLoading] = useState(Boolean(initialContract && token));
   const [error, setError] = useState(null);
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
 
   const [riskFilter, setRiskFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -71,9 +88,11 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
   const [playbookBusy, setPlaybookBusy] = useState(false);
 
   const [docPage, setDocPage] = useState(1);
+  const [showAllPages, setShowAllPages] = useState(true);
   const [highlightText, setHighlightText] = useState("");
   const [pdfUrl, setPdfUrl] = useState(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState(null);
+  const pageRefs = useRef({});
 
   const [qaQuery, setQaQuery] = useState("");
   const [qaLoading, setQaLoading] = useState(false);
@@ -86,6 +105,7 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
 
   const contractId = contract?._id;
   const isPdf = (contract?.fileType || "").toLowerCase() === "pdf";
+  const pdfLoading = tab === "document" && isPdf && Boolean(contractId && token) && !pdfUrl && !pdfError;
 
   useEffect(() => {
     if (!contractId || !token) return;
@@ -110,15 +130,19 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
   }, [contractId, token]);
 
   useEffect(() => {
-    if (tab !== "document" || !isPdf || !contractId || !token || pdfUrl) return undefined;
+    if (tab !== "document" || !isPdf || !contractId || !token || pdfUrl || pdfError) return undefined;
     let cancelled = false;
     contractsApi
       .fetchFileBlobUrl(token, contractId)
-      .then((url) => { if (!cancelled) setPdfUrl(url); else URL.revokeObjectURL(url); })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setPdfLoading(false); });
+      .then((url) => {
+        if (!cancelled) setPdfUrl(url);
+        else URL.revokeObjectURL(url);
+      })
+      .catch((err) => {
+        if (!cancelled) setPdfError(err.message || "Inline PDF preview unavailable.");
+      });
     return () => { cancelled = true; };
-  }, [tab, isPdf, contractId, token, pdfUrl]);
+  }, [tab, isPdf, contractId, token, pdfUrl, pdfError]);
 
   useEffect(() => () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl); }, [pdfUrl]);
 
@@ -174,17 +198,29 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
 
   if (!contract) return null;
 
+  const totalPages = Math.max(1, contract.pageCount || clausesByPage.length || 1);
   const facts = contract.keyFacts || {};
   const missing = contract.missingClauses || [];
   const totalRisk = Math.max(1, riskCounts.high + riskCounts.medium + riskCounts.low);
   const overall = contract.riskSummary?.overallLevel || (riskCounts.high ? "high" : riskCounts.medium ? "medium" : "low");
   const riskScore = contract.riskSummary?.score ?? 0;
 
+  const jumpToPage = (pageNum) => {
+    const clamped = Math.max(1, Math.min(totalPages, pageNum));
+    setDocPage(clamped);
+    const el = pageRefs.current[clamped];
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const openDocumentAt = (page = 1, snippet = "") => {
-    setDocPage(page || 1);
+    const targetPage = Math.max(1, Math.min(totalPages, page || 1));
+    setDocPage(targetPage);
     setHighlightText(snippet || "");
-    if (isPdf && !pdfUrl) setPdfLoading(true);
     setTab("document");
+    setTimeout(() => {
+      const el = pageRefs.current[targetPage];
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   };
 
   const copyText = async (id, text) => {
@@ -193,6 +229,42 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
       setCopiedId(id);
       setTimeout(() => setCopiedId((curr) => (curr === id ? null : curr)), 1600);
     } catch { /* ignore */ }
+  };
+
+  const handleReanalyze = async () => {
+    if (reanalyzing) return;
+    setReanalyzing(true);
+    setError(null);
+    try {
+      const data = await contractsApi.extract(token, contract._id);
+      if (data.document) {
+        setContractOverride(data.document);
+        onContractUpdated?.(data.document);
+      }
+      const cData = await contractsApi.clauses(token, contract._id);
+      setClauses(cData.clauses || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReanalyzing(false);
+    }
+  };
+
+  const toggleVisibility = async () => {
+    if (visibilityBusy) return;
+    const nextVis = contract.visibility === "team" ? "private" : "team";
+    setVisibilityBusy(true);
+    setError(null);
+    try {
+      await contractsApi.setVisibility(token, contract._id, nextVis);
+      const updated = { ...contract, visibility: nextVis };
+      setContractOverride(updated);
+      onContractUpdated?.(updated);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setVisibilityBusy(false);
+    }
   };
 
   const suggestRedline = async (clause) => {
@@ -225,15 +297,28 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
     setQaQuery("");
     setQaLoading(true);
     setQaError(null);
+
+    const recentTurns = qaHistory
+      .filter((h) => !h.insufficientInformation && h.answer)
+      .slice(0, 3)
+      .reverse()
+      .map((h) => ({ query: h.query, answer: h.answer }));
+
     try {
-      const data = await contractsApi.ask(token, contract._id, q);
+      const data = await contractsApi.ask(token, contract._id, q, recentTurns);
       setQaRes({ ...data, query: q });
       if (data.qaId) {
         setQaHistory((prev) => [
           {
-            _id: data.qaId, query: q, answer: data.answer || "", citations: data.citations || [],
-            confidence: data.confidence || "NONE", insufficientInformation: Boolean(data.insufficient_information),
-            latencyMs: data.latencyMs || 0, createdAt: new Date().toISOString(),
+            _id: data.qaId,
+            query: q,
+            answer: data.answer || "",
+            citations: data.citations || [],
+            indianLawRefs: data.indian_law_refs || [],
+            confidence: data.confidence || "NONE",
+            insufficientInformation: Boolean(data.insufficient_information),
+            latencyMs: data.latencyMs || 0,
+            createdAt: new Date().toISOString(),
           },
           ...prev.filter((i) => i._id !== data.qaId),
         ]);
@@ -243,6 +328,21 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
     } finally {
       setQaLoading(false);
     }
+  };
+
+  const openSavedAnswer = (item) => {
+    setQaError(null);
+    setQaRes({
+      qaId: item._id,
+      query: item.query,
+      answer: item.answer,
+      citations: item.citations || [],
+      indian_law_refs: item.indianLawRefs || [],
+      confidence: item.confidence || "NONE",
+      insufficient_information: Boolean(item.insufficientInformation),
+      latencyMs: item.latencyMs || 0,
+      results: [],
+    });
   };
 
   const rateAnswer = async (qaId, rating) => {
@@ -276,6 +376,10 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
     ["Governing Law", facts.governingLaw || "Not specified"],
   ];
 
+  const visiblePages = showAllPages
+    ? clausesByPage
+    : clausesByPage.filter(([p]) => p === docPage);
+
   return (
     <div className="drawer-backdrop" onClick={onClose}>
       <aside className="drawer-panel" role="dialog" aria-modal="true" aria-label={`Inspect ${contract.title}`} onClick={(e) => e.stopPropagation()}>
@@ -286,13 +390,33 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
               {contract.ocrUsed && <span className="mono-tag">OCR</span>}
               {contract.visibility === "team" && <span className="mono-tag">TEAM</span>}
               <span className={`risk-pill risk-${overall}`}>{overall.toUpperCase()} RISK · {riskScore}/100</span>
-              <span className="drawer-meta-sep">{contract.pageCount || 1}p · {(contract.totalTokens || 0).toLocaleString()} tok</span>
+              <span className="drawer-meta-sep">{totalPages}p · {(contract.totalTokens || 0).toLocaleString()} tok</span>
             </div>
             <h2 className="drawer-title">{contract.title || contract.fileName}</h2>
             <p className="drawer-filename">{contract.fileName}</p>
           </div>
 
           <div className="drawer-header-actions">
+            {user?.organizationId && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={toggleVisibility}
+                disabled={visibilityBusy}
+                title="Toggle team visibility"
+              >
+                {contract.visibility === "team" ? "Shared" : "Private"}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleReanalyze}
+              disabled={reanalyzing}
+              title="Re-extract clauses, risk scores, and vector index"
+            >
+              <RefreshIcon size={14} /> {reanalyzing ? "Analyzing..." : "Re-analyze"}
+            </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => printReport(contract, clauses)}>
               <PrinterIcon size={15} /> PDF
             </button>
@@ -318,10 +442,7 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
               role="tab"
               aria-selected={tab === t.id}
               className={`drawer-tab ${tab === t.id ? "active" : ""}`}
-              onClick={() => {
-                if (t.id === "document" && isPdf && !pdfUrl) setPdfLoading(true);
-                setTab(t.id);
-              }}
+              onClick={() => setTab(t.id)}
             >
               {t.icon} {t.label}
               {t.count !== undefined && t.count !== null && <span className="tab-count">{t.count}</span>}
@@ -330,6 +451,8 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
         </div>
 
         <div className="drawer-body">
+          {error && <div className="alert alert-error" style={{ marginBottom: 14 }}>{error}</div>}
+
           {tab === "overview" && (
             <div className="drawer-stack">
               <section className="panel-section">
@@ -339,7 +462,7 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
                     <ShieldCheckIcon size={14} /> {playbookBusy ? "Checking..." : "Playbook Check"}
                   </button>
                 </div>
-                <p className="summary-prose">{contract.summary || "Re-run analysis to generate an executive summary."}</p>
+                <p className="summary-prose">{contract.summary || "Click Re-analyze to generate an executive summary."}</p>
                 {playbookEval && (
                   <div className="playbook-mini-card">
                     <div className="section-head-row">
@@ -442,8 +565,6 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
 
               {loading ? (
                 <div className="state-box"><div className="spinner" /><p>Loading clauses...</p></div>
-              ) : error ? (
-                <div className="alert alert-error">{error}</div>
               ) : !filteredClauses.length ? (
                 <div className="state-box"><p>No clauses match your filter.</p></div>
               ) : (
@@ -527,12 +648,37 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
               <div className="section-head-row">
                 <div>
                   <span className="section-eyebrow">Source Document Viewer</span>
-                  <p className="muted-caption">Page {docPage} of {contract.pageCount || 1}{highlightText ? " · Cited clause highlighted" : ""}</p>
+                  <p className="muted-caption">
+                    Page {docPage} of {totalPages}{highlightText ? " · Cited clause highlighted" : ""}
+                  </p>
                 </div>
                 <div className="page-jump-controls">
-                  {Array.from({ length: Math.min(contract.pageCount || 1, 12) }, (_, i) => i + 1).map((p) => (
-                    <button key={p} type="button" className={`seg-btn ${docPage === p ? "active" : ""}`} onClick={() => setDocPage(p)}>P{p}</button>
+                  {pdfUrl && (
+                    <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">
+                      Open PDF
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    className="seg-btn"
+                    disabled={docPage <= 1}
+                    onClick={() => jumpToPage(docPage - 1)}
+                  >
+                    Prev
+                  </button>
+                  {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => i + 1).map((p) => (
+                    <button key={p} type="button" className={`seg-btn ${docPage === p ? "active" : ""}`} onClick={() => jumpToPage(p)}>
+                      P{p}
+                    </button>
                   ))}
+                  <button
+                    type="button"
+                    className="seg-btn"
+                    disabled={docPage >= totalPages}
+                    onClick={() => jumpToPage(docPage + 1)}
+                  >
+                    Next
+                  </button>
                 </div>
               </div>
 
@@ -541,19 +687,42 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
                   {pdfLoading ? (
                     <div className="state-box"><div className="spinner" /><p>Loading PDF preview...</p></div>
                   ) : pdfUrl ? (
-                    <iframe key={`${pdfUrl}-${docPage}`} src={`${pdfUrl}#page=${docPage}`} title={contract.title || contract.fileName} className="pdf-iframe" />
+                    <iframe
+                      key={`${pdfUrl}-${docPage}`}
+                      src={`${pdfUrl}#page=${docPage}`}
+                      title={contract.title || contract.fileName}
+                      className="pdf-iframe"
+                    />
                   ) : (
-                    <div className="state-box muted"><p>Inline PDF preview unavailable; synchronized clauses shown below.</p></div>
+                    <div className="state-box muted">
+                      <p>{pdfError || "Inline PDF preview unavailable; synchronized clauses shown below."}</p>
+                    </div>
                   )}
                 </div>
               )}
 
+              <div className="section-head-row">
+                <span className="section-eyebrow">Synchronized Extracted Text</span>
+                <div className="segmented-control">
+                  <button type="button" className={`seg-btn ${showAllPages ? "active" : ""}`} onClick={() => setShowAllPages(true)}>
+                    All Pages
+                  </button>
+                  <button type="button" className={`seg-btn ${!showAllPages ? "active" : ""}`} onClick={() => setShowAllPages(false)}>
+                    Page {docPage} Only
+                  </button>
+                </div>
+              </div>
+
               <div className="source-reader-pages">
-                {clausesByPage.map(([pageNum, list]) => (
-                  <section key={pageNum} className="source-page-block">
+                {visiblePages.map(([pageNum, list]) => (
+                  <section
+                    key={pageNum}
+                    ref={(el) => { pageRefs.current[pageNum] = el; }}
+                    className="source-page-block"
+                  >
                     <div className="source-page-header">
                       <span>Page {pageNum}</span>
-                      <span className="mono-caption">{list.length} provisions</span>
+                      <span className="mono-caption">{list.length} {list.length === 1 ? "provision" : "provisions"}</span>
                     </div>
                     {list.map((c, idx) => {
                       const hit = highlightText && (c.text.includes(highlightText.slice(0, 60)) || highlightText.includes(c.text.slice(0, 60)));
@@ -581,7 +750,7 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
                   className="text-input"
                   value={qaQuery}
                   onChange={(e) => setQaQuery(e.target.value)}
-                  placeholder="Ask a specific question about this contract..."
+                  placeholder="Ask anything about this contract — dates, amounts, clauses, risks, or obligations..."
                   disabled={qaLoading}
                 />
                 <button type="submit" className="btn btn-primary" disabled={qaLoading || !qaQuery.trim()}>
@@ -595,18 +764,23 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
                 ))}
               </div>
 
-              {qaLoading && <div className="state-box"><div className="spinner" /><p>Retrieving passages and verifying citations...</p></div>}
+              {qaLoading && <div className="state-box"><div className="spinner" /><p>Reading contract sections and verifying citations...</p></div>}
               {qaError && <div className="alert alert-error">{qaError}</div>}
 
               {!qaLoading && qaRes && (
                 <div className="qa-result-stack">
-                  {qaRes.query && <div className="qa-question-pill"><span className="section-eyebrow">Question</span><strong>{qaRes.query}</strong></div>}
+                  {qaRes.query && (
+                    <div className="qa-question-pill">
+                      <span className="section-eyebrow">Question</span>
+                      <strong>{qaRes.query}</strong>
+                    </div>
+                  )}
 
                   {qaRes.insufficient_information ? (
                     <div className="qa-refusal-box">
-                      <div className="qa-refusal-head"><AlertTriangleIcon size={16} /><strong>Not supported by this contract</strong></div>
-                      <p>{qaRes.answer}</p>
-                      {qaRes.message && <span className="mono-caption">{qaRes.message}</span>}
+                      <div className="qa-refusal-head"><AlertTriangleIcon size={16} /><strong>Not specified in this contract</strong></div>
+                      <FormattedText text={qaRes.answer || qaRes.message} className="qa-refusal-body" />
+                      {qaRes.message && qaRes.answer && <span className="mono-caption">{qaRes.message}</span>}
                     </div>
                   ) : (
                     <div className="qa-answer-box">
@@ -614,10 +788,20 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
                         <span className="qa-answer-label"><CheckCircleIcon size={15} /> Grounded Answer</span>
                         <div className="qa-answer-badges">
                           {qaRes.latencyMs > 0 && <span className="mono-caption">{(qaRes.latencyMs / 1000).toFixed(1)}s</span>}
-                          {qaRes.confidence && <span className={`confidence-pill conf-${qaRes.confidence.toLowerCase()}`}>{qaRes.confidence}</span>}
+                          {qaRes.confidence && qaRes.confidence !== "NONE" && (
+                            <span className={`confidence-pill conf-${qaRes.confidence.toLowerCase()}`}>{qaRes.confidence}</span>
+                          )}
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            onClick={() => copyText("qa-active", qaRes.answer)}
+                            aria-label="Copy answer"
+                          >
+                            {copiedId === "qa-active" ? <CheckIcon size={13} className="text-accent" /> : <CopyIcon size={13} />}
+                          </button>
                         </div>
                       </div>
-                      <p className="qa-answer-body">{qaRes.answer}</p>
+                      <FormattedText text={qaRes.answer} />
                       {qaRes.indian_law_refs?.length > 0 && (
                         <div className="law-ref-stack">
                           <span className="law-ref-badge">Applicable Indian Law</span>
@@ -631,7 +815,12 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
                       {qaRes.citations?.length > 0 && (
                         <div className="citation-row">
                           {qaRes.citations.map((cite, i) => (
-                            <button key={i} type="button" className="citation-tag clickable-citation" onClick={() => openDocumentAt(parsePage(cite), qaRes.results?.[i]?.text || "")}>
+                            <button
+                              key={i}
+                              type="button"
+                              className="citation-tag clickable-citation"
+                              onClick={() => openDocumentAt(parsePage(cite), qaRes.results?.[i]?.text || "")}
+                            >
                               {cite}
                             </button>
                           ))}
@@ -678,19 +867,31 @@ export default function ContractDrawer({ contract, initialTab = "overview", toke
                 <section className="history-section">
                   <span className="section-eyebrow"><ClockIcon size={13} /> Saved Q&amp;A History ({qaHistory.length})</span>
                   <div className="history-list">
-                    {qaHistory.slice(0, 8).map((item) => (
+                    {qaHistory.slice(0, 10).map((item) => (
                       <div key={item._id} className="history-card">
                         <div className="history-card-head">
-                          <button type="button" className="history-query-btn" onClick={() => askQuestion(item.query)}>{item.query}</button>
+                          <button type="button" className="history-query-btn" onClick={() => openSavedAnswer(item)}>
+                            {item.query}
+                          </button>
                           <div className="history-card-meta">
                             {!item.insufficientInformation && item.confidence && item.confidence !== "NONE" && (
                               <span className={`confidence-pill conf-${item.confidence.toLowerCase()}`}>{item.confidence}</span>
                             )}
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              style={{ padding: "2px 7px", fontSize: 11.5 }}
+                              onClick={() => askQuestion(item.query)}
+                              disabled={qaLoading}
+                              title="Re-run this question"
+                            >
+                              Re-ask
+                            </button>
                             <button type="button" className={`feedback-mini ${feedbackMap[item._id] === "up" ? "active-up" : ""}`} onClick={() => rateAnswer(item._id, "up")} aria-label="Helpful"><ThumbsUpIcon size={12} /></button>
                             <button type="button" className={`feedback-mini ${feedbackMap[item._id] === "down" ? "active-down" : ""}`} onClick={() => rateAnswer(item._id, "down")} aria-label="Needs review"><ThumbsDownIcon size={12} /></button>
                           </div>
                         </div>
-                        <p className="history-answer">{item.answer}</p>
+                        <p className="history-answer">{item.answer || "No answer recorded."}</p>
                       </div>
                     ))}
                   </div>

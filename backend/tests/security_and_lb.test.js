@@ -255,3 +255,21 @@ test("ExtractionJobQueue runs background jobs, emits progress, and reports metri
   assert.ok(metricsText.includes("lca_http_requests_total"));
   assert.ok(metricsText.includes("lca_extraction_jobs_active"));
 });
+
+test("S3StorageAdapter avoids duplicating bucket name when endpoint already includes bucket", () => {
+  const prev = { S3_BUCKET: process.env.S3_BUCKET, S3_ENDPOINT: process.env.S3_ENDPOINT };
+  process.env.S3_BUCKET = "contracts";
+  process.env.S3_ENDPOINT = "https://acct.r2.cloudflarestorage.com/contracts";
+  try {
+    const adapter = new storageService.S3StorageAdapter();
+    assert.equal(
+      adapter._buildUrl("user1/doc.pdf"),
+      "https://acct.r2.cloudflarestorage.com/contracts/user1/doc.pdf"
+    );
+  } finally {
+    if (prev.S3_BUCKET === undefined) delete process.env.S3_BUCKET;
+    else process.env.S3_BUCKET = prev.S3_BUCKET;
+    if (prev.S3_ENDPOINT === undefined) delete process.env.S3_ENDPOINT;
+    else process.env.S3_ENDPOINT = prev.S3_ENDPOINT;
+  }
+});

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { contractsApi } from "../api/client";
+import FormattedText from "./FormattedText";
 import { AlertTriangleIcon, CheckCircleIcon, SearchIcon, XIcon } from "./Icons";
 
 export default function LibrarySearchModal({ initialQuery, token, onClose }) {
@@ -134,7 +135,17 @@ export default function LibrarySearchModal({ initialQuery, token, onClose }) {
                       </span>
                     )}
                   </div>
-                  <p className="qa-answer-body">{response.answer}</p>
+                  <FormattedText text={response.answer} />
+                  {response.indian_law_refs?.length > 0 && (
+                    <div className="law-ref-stack">
+                      <span className="law-ref-badge">Applicable Indian Law</span>
+                      <div className="citation-row">
+                        {response.indian_law_refs.map((law, idx) => (
+                          <span key={idx} className="law-ref-pill">{law}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

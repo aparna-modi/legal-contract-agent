@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { authApi, systemApi, teamApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -23,11 +23,12 @@ function passwordStrength(pw) {
 export default function SecuritySettings() {
   const { user, token, login, updateUser, logoutAll } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const [profile, setProfile] = useState({ name: user?.name || "", organization: user?.organization || "Personal Workspace" });
   const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
   const [invite, setInvite] = useState({ email: "", role: "reviewer" });
-  const [joinCode, setJoinCode] = useState("");
+  const [joinCode, setJoinCode] = useState(() => searchParams.get("invite") || "");
   const [busy, setBusy] = useState({});
   const [msg, setMsg] = useState({});
   const [sessions, setSessions] = useState([]);
@@ -73,7 +74,8 @@ export default function SecuritySettings() {
       })
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [token, updateUser, user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   const runAction = async (key, fn, onSuccess) => {
     setBusy((b) => ({ ...b, [key]: true }));

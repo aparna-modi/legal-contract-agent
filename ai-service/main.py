@@ -27,7 +27,7 @@ _LATENCY_COUNT = 0
 
 app = FastAPI(
     title="Legal Contract Agent - AI Service",
-    version="2.0.0",
+    version="2.1.0",
     docs_url=None if is_production() else "/docs",
     redoc_url=None if is_production() else "/redoc",
 )
@@ -95,6 +95,7 @@ class VectorIndexRequest(BaseModel):
     user_id: str
     document_id: str
     chunks: List[Dict[str, Any]]
+    replace: bool = False
 
 
 class VectorDeleteRequest(BaseModel):
@@ -106,9 +107,12 @@ class RetrieveRequest(BaseModel):
     query: str
     user_id: str
     document_id: Optional[str] = None
+    document_title: Optional[str] = None
     top_k: int = Field(5, ge=1, le=50)
     min_score: float = Field(0.25, ge=0.0, le=1.0)
     use_reranker: bool = True
+    fallback_chunks: Optional[List[Dict[str, Any]]] = None
+    conversation_history: Optional[List[Dict[str, str]]] = None
 
 
 class AnalyzeContractRequest(BaseModel):
@@ -146,7 +150,7 @@ AUTH = [Depends(require_internal_auth)]
 async def root():
     return {
         "status": "AI Service is running",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "endpoints": {
             "health": "/health", "live": "/health/live", "ready": "/health/ready",
             "extract_file": "/api/v1/extract", "extract_path": "/api/v1/extract-path",
@@ -197,9 +201,13 @@ async def extract_document(
     elif file_path:
         result = ExtractionService.extract_from_path(file_path, custom_name=title, embed=embed)
     else:
-        raise HTTPException(status_code=400, detail="Either an uploaded 'file' or a 'file_path' parameter must be provided.")
+        raise HTTPException(
+            status_code=400,
+            detail="Either an uploaded 'file' or a 'file_path' parameter must be provided.",
+        )
 
     if index_vector and user_id and document_id and result.chunks:
+        vector_store.delete_by_document(user_id, document_id)
         vector_store.upsert_chunks(user_id, document_id, [c.model_dump() for c in result.chunks])
     return result
 
@@ -208,6 +216,7 @@ async def extract_document(
 async def extract_from_local_path(payload: ExtractPathRequest):
     result = ExtractionService.extract_from_path(payload.file_path, custom_name=payload.title, embed=payload.embed)
     if payload.index_vector and payload.user_id and payload.document_id and result.chunks:
+        vector_store.delete_by_document(payload.user_id, payload.document_id)
         vector_store.upsert_chunks(payload.user_id, payload.document_id, [c.model_dump() for c in result.chunks])
     return result
 
@@ -217,7 +226,9 @@ async def analyze_contract(payload: AnalyzeContractRequest):
     if not payload.full_text.strip():
         raise HTTPException(status_code=400, detail="Contract text cannot be empty.")
     return analysis_service.analyze_contract(
-        document_name=payload.document_name, full_text=payload.full_text, classified_clauses=payload.classified_clauses
+        document_name=payload.document_name,
+        full_text=payload.full_text,
+        classified_clauses=payload.classified_clauses,
     )
 
 
@@ -226,8 +237,10 @@ async def compare_contracts(payload: CompareContractsRequest):
     if not payload.clauses_a and not payload.clauses_b:
         raise HTTPException(status_code=400, detail="Both contracts have no extracted clauses to compare.")
     return analysis_service.compare_contracts(
-        contract_a_title=payload.contract_a_title, clauses_a=payload.clauses_a,
-        contract_b_title=payload.contract_b_title, clauses_b=payload.clauses_b,
+        contract_a_title=payload.contract_a_title,
+        clauses_a=payload.clauses_a,
+        contract_b_title=payload.contract_b_title,
+        clauses_b=payload.clauses_b,
     )
 
 
@@ -259,8 +272,16 @@ async def calculate_similarity(payload: SimilarityRequest):
 async def index_chunks(payload: VectorIndexRequest):
     if not payload.chunks:
         raise HTTPException(status_code=400, detail="Chunks list cannot be empty.")
+    if payload.replace:
+        vector_store.delete_by_document(payload.user_id, payload.document_id)
     count = vector_store.upsert_chunks(user_id=payload.user_id, document_id=payload.document_id, chunks=payload.chunks)
-    return {"status": "success", "message": f"Indexed {count} chunks into vector store.", "user_id": payload.user_id, "document_id": payload.document_id, "indexed_count": count}
+    return {
+        "status": "success",
+        "message": f"Indexed {count} chunks into vector store.",
+        "user_id": payload.user_id,
+        "document_id": payload.document_id,
+        "indexed_count": count,
+    }
 
 
 @app.post("/api/v1/vector/delete", tags=["Vector Database"], dependencies=AUTH)
@@ -271,7 +292,13 @@ async def delete_vectors(payload: VectorDeleteRequest):
     else:
         deleted = vector_store.delete_by_user(payload.user_id)
         msg = f"Removed {deleted} vectors for user '{payload.user_id}'."
-    return {"status": "success", "message": msg, "deleted_count": deleted, "user_id": payload.user_id, "document_id": payload.document_id}
+    return {
+        "status": "success",
+        "message": msg,
+        "deleted_count": deleted,
+        "user_id": payload.user_id,
+        "document_id": payload.document_id,
+    }
 
 
 @app.get("/api/v1/vector/stats", tags=["Vector Database"], dependencies=AUTH)
@@ -286,8 +313,15 @@ async def get_vector_stats(user_id: Optional[str] = Query(None)):
 @app.post("/api/v1/retrieve", tags=["Retrieval & RAG"], dependencies=AUTH)
 async def retrieve_passages(payload: RetrieveRequest):
     return retrieval_service.retrieve(
-        query=payload.query, user_id=payload.user_id, document_id=payload.document_id,
-        top_k=payload.top_k, min_score=payload.min_score, use_reranker=payload.use_reranker,
+        query=payload.query,
+        user_id=payload.user_id,
+        document_id=payload.document_id,
+        document_title=payload.document_title,
+        top_k=payload.top_k,
+        min_score=payload.min_score,
+        use_reranker=payload.use_reranker,
+        fallback_chunks=payload.fallback_chunks,
+        conversation_history=payload.conversation_history,
     )
 
 
@@ -296,16 +330,21 @@ async def suggest_redline(payload: RedlineRequest):
     if not payload.clause_text.strip():
         raise HTTPException(status_code=400, detail="Clause text is required.")
     return playbook_service.suggest_redline(
-        clause_type=payload.clause_type, clause_text=payload.clause_text,
-        risk_level=payload.risk_level, risk_reason=payload.risk_reason, playbook_guidance=payload.playbook_guidance,
+        clause_type=payload.clause_type,
+        clause_text=payload.clause_text,
+        risk_level=payload.risk_level,
+        risk_reason=payload.risk_reason,
+        playbook_guidance=payload.playbook_guidance,
     )
 
 
 @app.post("/api/v1/playbook/evaluate", tags=["Playbook & Redline"], dependencies=AUTH)
 async def evaluate_playbook(payload: PlaybookEvaluateRequest):
     return playbook_service.evaluate_playbook(
-        clauses=payload.clauses, missing_clauses=payload.missing_clauses,
-        key_facts=payload.key_facts, rules=payload.rules,
+        clauses=payload.clauses,
+        missing_clauses=payload.missing_clauses,
+        key_facts=payload.key_facts,
+        rules=payload.rules,
     )
 
 

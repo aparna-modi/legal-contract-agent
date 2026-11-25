@@ -164,3 +164,36 @@ def test_gemini_unsupported_abstention_override(test_retrieval_service, monkeypa
     )
     assert res["insufficient_information"] is True
     assert "does not specify" in res["answer"].lower()
+
+
+def test_self_healing_reindex_from_fallback_chunks(test_retrieval_service):
+    fallback = [
+        {
+            "chunk_id": "fb_1",
+            "text": "The Purchaser shall pay an initial advance of INR 15,00,000 via RTGS prior to execution.",
+            "section": "2. PURCHASE CONSIDERATION & PAYMENT SCHEDULE",
+            "clause_type": "Payment Terms & Consideration",
+            "page_number": 2,
+        },
+        {
+            "chunk_id": "fb_2",
+            "text": "Exclusive covered car parking space bearing No. B2-P18 is included in Basement-2.",
+            "section": "1. SUBJECT MATTER & PROPERTY SCHEDULE",
+            "clause_type": "Property Schedule & Conveyance",
+            "page_number": 2,
+        },
+    ]
+
+    # Vector store starts empty; fallback_chunks must auto-index and answer without error.
+    res = test_retrieval_service.retrieve(
+        query="What is the car parking slot number?",
+        user_id="user_reheal",
+        document_id="doc_reheal",
+        top_k=3,
+        min_score=0.15,
+        fallback_chunks=fallback,
+    )
+    assert res["insufficient_information"] is False
+    assert "B2-P18" in res["answer"]
+    assert test_retrieval_service.store.count("user_reheal") == 2
+

@@ -33,37 +33,45 @@ async function attemptSilentRefresh() {
   return refreshInFlight;
 }
 
-async function request(
-  path,
-  { method = "GET", token, body, isFormData = false, _retried = false } = {}
-) {
-  const headers = {};
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  if (body && !isFormData) {
-    headers["Content-Type"] = "application/json";
-  }
+async function fetchWithAuth(path, { method = "GET", token, headers = {}, body, _retried = false } = {}) {
+  const finalHeaders = { ...headers };
+  if (token) finalHeaders.Authorization = `Bearer ${token}`;
 
   let response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       method,
-      headers,
+      headers: finalHeaders,
       credentials: "include",
-      body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
+      body,
     });
   } catch {
-    throw new Error("Unable to reach the API server. Make sure the backend is running on port 5000.");
+    throw new Error("Unable to reach the API server. Please check your connection and try again.");
   }
 
   if (response.status === 401 && token && !_retried && !path.startsWith("/api/auth/")) {
     const freshToken = await attemptSilentRefresh();
     if (freshToken) {
-      return request(path, { method, token: freshToken, body, isFormData, _retried: true });
+      return fetchWithAuth(path, { method, token: freshToken, headers, body, _retried: true });
     }
     onAuthExpired?.();
   }
+
+  return response;
+}
+
+async function request(path, { method = "GET", token, body, isFormData = false } = {}) {
+  const headers = {};
+  if (body && !isFormData) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  const response = await fetchWithAuth(path, {
+    method,
+    token,
+    headers,
+    body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
+  });
 
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json")
@@ -127,11 +135,11 @@ export const contractsApi = {
   risks: (token, id) => request(`/api/contracts/${id}/risks`, { token }),
   qaHistory: (token, id) => request(`/api/contracts/${id}/qa`, { token }),
   summary: (token, id) => request(`/api/contracts/${id}/summary`, { token }),
-  ask: (token, id, query) =>
+  ask: (token, id, query, history = []) =>
     request(`/api/contracts/${id}/ask`, {
       method: "POST",
       token,
-      body: { query, top_k: 5, min_score: 0.22 },
+      body: { query, top_k: 6, min_score: 0.20, history },
     }),
   search: (token, query) =>
     request("/api/contracts/search", {
@@ -148,21 +156,18 @@ export const contractsApi = {
   vectorStats: (token) => request("/api/contracts/stats/vectors", { token }),
   remove: (token, id) => request(`/api/contracts/${id}`, { method: "DELETE", token }),
   fetchFileBlobUrl: async (token, id) => {
-    const res = await fetch(`${API_BASE_URL}/api/contracts/${id}/file`, {
-      headers: { Authorization: `Bearer ${token}` },
-      credentials: "include",
-    });
+    const res = await fetchWithAuth(`/api/contracts/${id}/file`, { token });
     if (!res.ok) {
-      throw new Error("Could not load source document preview.");
+      const payload = await res.json().catch(() => ({}));
+      throw new Error(payload.message || "Could not load source document preview.");
     }
-    const blob = await res.blob();
+    const contentType = res.headers.get("content-type") || "application/pdf";
+    const buffer = await res.arrayBuffer();
+    const blob = new Blob([buffer], { type: contentType });
     return URL.createObjectURL(blob);
   },
   downloadReport: async (token, id, filename) => {
-    const res = await fetch(`${API_BASE_URL}/api/contracts/${id}/report`, {
-      headers: { Authorization: `Bearer ${token}` },
-      credentials: "include",
-    });
+    const res = await fetchWithAuth(`/api/contracts/${id}/report`, { token });
     if (!res.ok) {
       throw new Error("Could not export contract analysis report.");
     }

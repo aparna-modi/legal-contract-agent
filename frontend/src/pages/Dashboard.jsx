@@ -379,7 +379,18 @@ export default function Dashboard() {
       </section>
 
       {activeContract && (
-        <ContractDrawer key={`${activeContract._id}-${drawerTab}`} contract={activeContract} initialTab={drawerTab} token={token} onClose={() => setActiveContract(null)} />
+        <ContractDrawer
+          key={`${activeContract._id}-${drawerTab}`}
+          contract={activeContract}
+          initialTab={drawerTab}
+          token={token}
+          onClose={() => setActiveContract(null)}
+          onContractUpdated={(updatedDoc) => {
+            setActiveContract(updatedDoc);
+            setContracts((prev) => prev.map((c) => (c._id === updatedDoc._id ? updatedDoc : c)));
+            contractsApi.vectorStats(token).then(setVectorStats).catch(() => {});
+          }}
+        />
       )}
       {searchModal.open && (
         <LibrarySearchModal key={searchModal.query} initialQuery={searchModal.query} token={token} onClose={() => setSearchModal({ open: false, query: "" })} />

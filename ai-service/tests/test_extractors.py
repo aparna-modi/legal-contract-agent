@@ -36,6 +36,26 @@ class TestPDFExtractor:
         with pytest.raises(ValueError, match="Failed to parse PDF document"):
             extractor.extract_from_bytes(b"not a valid pdf", "corrupt.pdf")
 
+    def test_pdf_strips_repeating_headers_and_preserves_subclause_headings(self):
+        from tests.conftest import create_sample_pdf
+
+        pages = [
+            "Acme Property Agreement\nPage 1\n1. PAYMENT TERMS\n1.1 The buyer shall pay INR 15,00,000 as initial advance.",
+            "Acme Property Agreement\nPage 2\n2. TITLE VERIFICATION\n2.1 In the event the legal counsel identifies any defect in title, the seller shall cure it within 21 days.",
+        ]
+        extractor = PDFDocumentExtractor()
+        result = extractor.extract_from_bytes(create_sample_pdf(pages), "property.pdf")
+
+        # Repeating header should not pollute clause chunks.
+        assert all(c.text.strip() != "Acme Property Agreement" for c in result.chunks)
+        # Wrapped sub-clause prose must inherit its section heading rather than turning into a heading itself.
+        defect_chunks = [c for c in result.chunks if "defect in title" in c.text]
+        assert len(defect_chunks) == 1
+        assert defect_chunks[0].page_number == 2
+        assert defect_chunks[0].section_heading == "2. TITLE VERIFICATION"
+        for chunk in result.chunks:
+            assert result.full_text[chunk.start_char : chunk.end_char] == chunk.text
+
 
 class TestDOCXExtractor:
     def test_extract_docx_headings_and_tables(self, sample_docx_bytes):

@@ -43,7 +43,7 @@ const documentSchema = new mongoose.Schema(
     },
     storageProvider: {
       type: String,
-      enum: ["local", "s3"],
+      enum: ["local", "s3", "gridfs"],
       default: "local",
     },
     storageKey: {
@@ -92,6 +92,11 @@ const documentSchema = new mongoose.Schema(
     vectorCount: {
       type: Number,
       default: 0,
+    },
+    fullText: {
+      type: String,
+      default: "",
+      select: false,
     },
     summary: {
       type: String,

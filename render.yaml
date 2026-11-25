@@ -49,7 +49,9 @@ services:
       - key: REDIS_URL
         sync: false
       - key: STORAGE_PROVIDER
-        value: s3
+        value: gridfs
+      - key: AI_TIMEOUT_MS
+        value: "90000"
       - key: S3_BUCKET
         sync: false
       - key: S3_REGION
@@ -60,7 +62,7 @@ services:
         sync: false
       - key: S3_SECRET_ACCESS_KEY
         sync: false
-      - key: SMTP_HOST
+      - key: RESEND_API_KEY
         sync: false
       - key: SENTRY_DSN
         sync: false

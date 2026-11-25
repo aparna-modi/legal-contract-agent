@@ -60,7 +60,7 @@ def get_health_status() -> Dict[str, Any]:
     return {
         "status": "healthy",
         "service": "Legal Contract Agent - AI Service",
-        "version": "1.2.0",
+        "version": "2.1.0",
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "python_version": sys.version.split()[0],
         "system": {

@@ -42,21 +42,39 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-const unlinkSafe = (p) => { try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch {} };
-const stripPath = (doc) => { const o = doc.toObject ? doc.toObject() : { ...doc }; delete o.filePath; return o; };
+const unlinkSafe = (p) => {
+  try {
+    if (p && fs.existsSync(p)) fs.unlinkSync(p);
+  } catch {
+    // Ignore cleanup errors on already-removed temp files.
+  }
+};
 
-async function loadContract(id, user, res, { requireWrite = false } = {}) {
+const sanitizeContractResponse = (doc) => {
+  const obj = doc.toObject ? doc.toObject() : { ...doc };
+  delete obj.filePath;
+  delete obj.fullText;
+  return obj;
+};
+
+async function loadContract(id, user, res, { requireWrite = false, includeFullText = false } = {}) {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     res.status(400).json({ message: "Invalid contract ID format." });
     return null;
   }
-  const doc = await DocumentModel.findById(id);
+  const query = DocumentModel.findById(id);
+  if (includeFullText) query.select("+fullText");
+  const doc = await query;
   if (!doc) {
     res.status(404).json({ message: "Contract not found." });
     return null;
   }
+
   const isOwner = doc.user.toString() === user._id.toString();
-  const isTeam = doc.visibility === "team" && doc.organization && user.organizationId &&
+  const isTeam =
+    doc.visibility === "team" &&
+    doc.organization &&
+    user.organizationId &&
     doc.organization.toString() === user.organizationId.toString();
 
   if (!isOwner && !isTeam) {
@@ -68,6 +86,65 @@ async function loadContract(id, user, res, { requireWrite = false } = {}) {
     return null;
   }
   return doc;
+}
+
+/**
+ * Build vector-indexable chunk payloads from MongoDB Clauses (or fullText fallback)
+ * so Q&A and library search self-heal automatically if the AI vector store restarts.
+ */
+async function buildStoredChunksForContract(contract) {
+  const savedClauses = await ClauseModel.find({ document: contract._id }).sort({ pageNumber: 1, createdAt: 1 }).lean();
+  if (savedClauses.length) {
+    return savedClauses.map((c, idx) => ({
+      chunk_id: String(c._id || `clause_${idx + 1}`),
+      text: c.text,
+      page_number: c.pageNumber || 1,
+      section_heading: c.sectionHeading || "General",
+      clause_type: c.clauseType || "General Provision",
+    }));
+  }
+
+  const rawText = (contract.fullText || "").trim();
+  if (!rawText) return [];
+
+  const blocks = rawText
+    .split(/\n{2,}/)
+    .map((b) => b.trim())
+    .filter((b) => b.length >= 20);
+  return blocks.map((text, idx) => ({
+    chunk_id: `text_${idx + 1}`,
+    text,
+    page_number: 1,
+    section_heading: "Contract Text",
+    clause_type: "General Provision",
+  }));
+}
+
+async function reindexContractFromMongo(contract, requestId = "") {
+  const chunks = await buildStoredChunksForContract(contract);
+  if (!chunks.length) return [];
+
+  try {
+    const idxRes = await aiClient.request("/api/v1/vector/index", {
+      method: "POST",
+      requestId,
+      timeoutMs: 45000,
+      body: {
+        user_id: contract.user.toString(),
+        document_id: contract._id.toString(),
+        chunks,
+        replace: true,
+      },
+    });
+    if (idxRes.ok) {
+      await DocumentModel.findByIdAndUpdate(contract._id, {
+        $set: { vectorIndexed: true, vectorCount: chunks.length },
+      }).catch(() => {});
+    }
+  } catch (err) {
+    console.warn(`Self-healing reindex warning for contract ${contract._id}:`, err.message);
+  }
+  return chunks;
 }
 
 async function enqueueExtraction(contract, req, res) {
@@ -117,13 +194,17 @@ async function runExtraction(contract, req, onProgress = () => {}) {
   const ext = await aiRes.json();
   const chunks = ext.chunks || [];
 
-  onProgress("analyzing", 70, "Synthesizing executive summary, plain-English clause explanations & Indian law references...");
+  onProgress(
+    "analyzing",
+    70,
+    "Generating executive summary, plain-English explanations, and Indian law references..."
+  );
   let analysis = null;
   try {
     const res = await aiClient.request("/api/v1/analyze", {
       method: "POST",
       requestId: req?.requestId || "",
-      timeoutMs: 45000,
+      timeoutMs: 60000,
       body: {
         document_name: contract.title || contract.fileName,
         full_text: ext.full_text || "",
@@ -147,12 +228,17 @@ async function runExtraction(contract, req, onProgress = () => {}) {
     const exp = expByIdx.get(idx);
     return {
       document: contract._id,
-      clauseType: (c.clause_type || c.section_heading || "General Provision").replace(/^\d+(?:\.\d+)*[.)]\s*/, "").trim() || "General Provision",
+      clauseType:
+        (c.clause_type || c.section_heading || "General Provision")
+          .replace(/^\d+(?:\.\d+)*\s*[.)\-:]?\s*/, "")
+          .trim() || "General Provision",
       text: c.text,
       pageNumber: c.page_number || 1,
       sectionHeading: c.section_heading || "General",
       riskLevel: c.risk_level || "low",
-      riskReason: c.risk_reason || (c.section_heading ? `Extracted under '${c.section_heading}'.` : "Standard contractual provision."),
+      riskReason:
+        c.risk_reason ||
+        (c.section_heading ? `Extracted under '${c.section_heading}'.` : "Standard contractual provision."),
       plainEnglish: exp?.plain_english || c.plain_english || "",
       indianLawRef: exp?.indian_law_ref || c.indian_law_ref || "",
     };
@@ -172,6 +258,7 @@ async function runExtraction(contract, req, onProgress = () => {}) {
     ocrUsed: Boolean(ext.metadata?.ocr_used),
     vectorIndexed: true,
     vectorCount: chunks.length,
+    fullText: String(ext.full_text || "").slice(0, 450000),
     summary: analysis?.executive_summary || "",
     analysisProvider: analysis?.provider || "",
     keyFacts: {
@@ -210,7 +297,7 @@ async function runExtraction(contract, req, onProgress = () => {}) {
   return {
     savedClausesCount: clauses.length,
     vectorsIndexedCount: chunks.length,
-    document: stripPath(contract),
+    document: sanitizeContractResponse(contract),
     analysis,
     extraction: ext,
   };
@@ -268,11 +355,14 @@ function buildReportMarkdown(contract, clauses) {
 router.post("/upload", protect, uploadLimiter, (req, res) => {
   upload.single("contract")(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
-      return res.status(400).json({ message: err.code === "LIMIT_FILE_SIZE" ? "File size exceeds the 10MB limit." : err.message });
+      return res.status(400).json({
+        message: err.code === "LIMIT_FILE_SIZE" ? "File size exceeds the 10MB limit." : err.message,
+      });
     }
     if (err) return res.status(400).json({ message: err.message });
     if (!req.file) return res.status(400).json({ message: "No contract file was uploaded." });
 
+    let stored = null;
     try {
       const ext = path.extname(req.file.originalname).toLowerCase().replace(".", "");
       const sig = validateFileMagicBytes(req.file.path, ext);
@@ -281,10 +371,10 @@ router.post("/upload", protect, uploadLimiter, (req, res) => {
         return res.status(400).json({ message: sig.message });
       }
 
-      const stored = await storageService.putObject({
+      stored = await storageService.putObject({
         key: `${req.user._id}/${path.basename(req.file.path)}`,
         localPath: req.file.path,
-        contentType: req.file.mimetype || "application/octet-stream",
+        contentType: req.file.mimetype || MIME_MAP[ext] || "application/octet-stream",
       });
 
       const doc = await DocumentModel.create({
@@ -308,11 +398,26 @@ router.post("/upload", protect, uploadLimiter, (req, res) => {
         summary: `Uploaded "${doc.title}" (${ext.toUpperCase()}, ${stored.provider})`,
       });
 
-      res.status(201).json({ message: "Contract uploaded successfully.", document: stripPath(doc) });
+      res.status(201).json({
+        message: "Contract uploaded successfully.",
+        document: sanitizeContractResponse(doc),
+      });
     } catch (error) {
       unlinkSafe(req.file?.path);
-      console.error("Contract upload error:", error.message);
-      res.status(500).json({ message: "Failed to save contract metadata." });
+      if (stored?.storageKey) {
+        await storageService
+          .deleteObject({
+            storageProvider: stored.provider,
+            storageKey: stored.storageKey,
+            filePath: stored.filePath,
+          })
+          .catch(() => {});
+      }
+      console.error("Contract upload error:", error);
+      const userMessage = stored
+        ? "Could not save contract record to the database. Please try again."
+        : `Failed to store uploaded file: ${error.message || "storage service error"}`;
+      res.status(error?.status || 500).json({ message: userMessage });
     }
   });
 });
@@ -338,30 +443,63 @@ router.get("/jobs/:jobId", protect, (req, res) => {
 router.post("/search", protect, aiLimiter, async (req, res) => {
   const started = Date.now();
   try {
-    const { query, top_k = 5, min_score = 0.2, use_reranker = true } = req.body || {};
+    const { query, top_k = 6, min_score = 0.2, use_reranker = true } = req.body || {};
     const q = String(query || "").trim().slice(0, 600);
     if (!q) return res.status(400).json({ message: "Search query is required." });
 
-    const aiRes = await aiClient.request("/api/v1/retrieve", {
+    const payload = {
+      query: q,
+      user_id: req.user._id.toString(),
+      top_k: Math.min(20, Math.max(1, Number(top_k) || 6)),
+      min_score: Math.min(1, Math.max(0, Number(min_score) || 0.2)),
+      use_reranker: Boolean(use_reranker),
+    };
+
+    let aiRes = await aiClient.request("/api/v1/retrieve", {
       method: "POST",
       requestId: req.requestId,
-      body: {
-        query: q,
-        user_id: req.user._id.toString(),
-        top_k: Math.min(20, Math.max(1, Number(top_k) || 5)),
-        min_score: Math.min(1, Math.max(0, Number(min_score) || 0.2)),
-        use_reranker: Boolean(use_reranker),
-      },
+      body: payload,
     });
     if (!aiRes.ok) {
       const err = await aiRes.json().catch(() => ({}));
       return res.status(aiRes.status).json({ message: err.detail || "AI search request failed." });
     }
 
-    const data = await aiRes.json();
+    let data = await aiRes.json();
+
+    // Self-heal library search if vectors were cleared on an ephemeral AI worker restart.
+    if (data.total_candidates === 0 || data.needs_reindex) {
+      const completedDocs = await DocumentModel.find({ user: req.user._id, status: "completed" })
+        .select("+fullText")
+        .sort({ extractedAt: -1 })
+        .limit(15);
+
+      let reindexedAny = false;
+      for (const doc of completedDocs) {
+        const chunks = await reindexContractFromMongo(doc, req.requestId);
+        if (chunks.length) reindexedAny = true;
+      }
+
+      if (reindexedAny) {
+        aiRes = await aiClient.request("/api/v1/retrieve", {
+          method: "POST",
+          requestId: req.requestId,
+          body: payload,
+        });
+        if (aiRes.ok) data = await aiRes.json();
+      }
+    }
+
     const ids = [...new Set((data.results || []).map((r) => r.document_id).filter(Boolean))];
-    const docs = await DocumentModel.find({ _id: { $in: ids }, user: req.user._id }).select("title fileName").lean();
+    const docFilter = req.user.organizationId
+      ? {
+          _id: { $in: ids },
+          $or: [{ user: req.user._id }, { organization: req.user.organizationId, visibility: "team" }],
+        }
+      : { _id: { $in: ids }, user: req.user._id };
+    const docs = ids.length ? await DocumentModel.find(docFilter).select("title fileName").lean() : [];
     const map = new Map(docs.map((d) => [d._id.toString(), d]));
+
     if (data.results) {
       data.results = data.results.map((r) => ({
         ...r,
@@ -376,6 +514,7 @@ router.post("/search", protect, aiLimiter, async (req, res) => {
       query: q,
       answer: data.answer || "",
       citations: data.citations || [],
+      indianLawRefs: data.indian_law_refs || [],
       confidence: data.confidence || "NONE",
       insufficientInformation: Boolean(data.insufficient_information),
       provider: data.provider || "",
@@ -465,7 +604,7 @@ router.get("/stats/vectors", protect, async (req, res) => {
 router.get("/:id", protect, async (req, res) => {
   try {
     const contract = await loadContract(req.params.id, req.user, res);
-    if (contract) res.json({ contract: stripPath(contract) });
+    if (contract) res.json({ contract: sanitizeContractResponse(contract) });
   } catch (err) {
     console.error("Get contract error:", err.message);
     res.status(500).json({ message: "Failed to fetch contract." });
@@ -477,14 +616,21 @@ router.patch("/:id/visibility", protect, async (req, res) => {
     const contract = await loadContract(req.params.id, req.user, res, { requireWrite: true });
     if (!contract) return;
     const { visibility } = req.body || {};
-    if (!["private", "team"].includes(visibility)) return res.status(400).json({ message: "Visibility must be 'private' or 'team'." });
+    if (!["private", "team"].includes(visibility)) {
+      return res.status(400).json({ message: "Visibility must be 'private' or 'team'." });
+    }
     if (visibility === "team" && !req.user.organizationId) {
       return res.status(400).json({ message: "Join or initialize a team workspace before sharing contracts." });
     }
     contract.visibility = visibility;
     if (visibility === "team") contract.organization = req.user.organizationId;
     await contract.save();
-    recordAudit(req, { action: "visibility_updated", resourceType: "contract", resourceId: contract._id, summary: `Set "${contract.title}" visibility to ${visibility.toUpperCase()}` });
+    recordAudit(req, {
+      action: "visibility_updated",
+      resourceType: "contract",
+      resourceId: contract._id,
+      summary: `Set "${contract.title}" visibility to ${visibility.toUpperCase()}`,
+    });
     res.json({ message: `Contract visibility updated to ${visibility}.`, visibility });
   } catch (err) {
     console.error("Visibility update error:", err.message);
@@ -507,7 +653,7 @@ router.get("/:id/file", protect, async (req, res) => {
     res.send(buf);
   } catch (err) {
     console.error("Stream contract file error:", err.message);
-    res.status(err?.status || 500).json({ message: "Failed to retrieve contract file." });
+    res.status(err?.status || 500).json({ message: err?.message || "Failed to retrieve contract file." });
   }
 });
 
@@ -520,13 +666,15 @@ router.get("/:id/events", protect, async (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
-  res.write(`data: ${JSON.stringify({
-    contractId: contract._id,
-    status: contract.status,
-    stage: contract.jobProgress?.stage || contract.status,
-    percent: contract.jobProgress?.percent || (contract.status === "completed" ? 100 : 0),
-    message: contract.jobProgress?.message || "",
-  })}\n\n`);
+  res.write(
+    `data: ${JSON.stringify({
+      contractId: contract._id,
+      status: contract.status,
+      stage: contract.jobProgress?.stage || contract.status,
+      percent: contract.jobProgress?.percent || (contract.status === "completed" ? 100 : 0),
+      message: contract.jobProgress?.message || "",
+    })}\n\n`
+  );
 
   const keepAlive = setInterval(() => res.write(": keepalive\n\n"), 15000);
   const unsub = extractionQueue.subscribe(contract._id.toString(), (payload) => {
@@ -537,7 +685,10 @@ router.get("/:id/events", protect, async (req, res) => {
       res.end();
     }
   });
-  req.on("close", () => { clearInterval(keepAlive); unsub(); });
+  req.on("close", () => {
+    clearInterval(keepAlive);
+    unsub();
+  });
 });
 
 router.delete("/:id", protect, async (req, res) => {
@@ -550,12 +701,14 @@ router.delete("/:id", protect, async (req, res) => {
       storageKey: contract.storageKey,
       filePath: contract.filePath,
     });
-    await aiClient.request("/api/v1/vector/delete", {
-      method: "POST",
-      requestId: req.requestId,
-      timeoutMs: 10000,
-      body: { user_id: contract.user.toString(), document_id: contract._id.toString() },
-    }).catch((e) => console.warn("Vector purge skipped:", e.message));
+    await aiClient
+      .request("/api/v1/vector/delete", {
+        method: "POST",
+        requestId: req.requestId,
+        timeoutMs: 10000,
+        body: { user_id: contract.user.toString(), document_id: contract._id.toString() },
+      })
+      .catch((e) => console.warn("Vector purge skipped:", e.message));
 
     await Promise.all([
       ClauseModel.deleteMany({ document: contract._id }),
@@ -563,7 +716,12 @@ router.delete("/:id", protect, async (req, res) => {
       FeedbackModel.deleteMany({ document: contract._id }),
       DocumentModel.findByIdAndDelete(req.params.id),
     ]);
-    recordAudit(req, { action: "delete", resourceType: "contract", resourceId: contract._id, summary: `Deleted "${contract.title}" and purged indexed vectors` });
+    recordAudit(req, {
+      action: "delete",
+      resourceType: "contract",
+      resourceId: contract._id,
+      summary: `Deleted "${contract.title}" and purged indexed vectors`,
+    });
     res.json({ message: "Contract, clauses, Q&A history, and vector embeddings deleted." });
   } catch (err) {
     console.error("Delete contract error:", err.message);
@@ -596,7 +754,9 @@ router.post("/:id/extract", protect, aiLimiter, async (req, res) => {
       await contract.save().catch(() => {});
     }
     res.status(err?.status || 500).json({
-      message: [404, 503].includes(err?.status) ? err.message : "Failed to communicate with AI service. Ensure ai-service is healthy.",
+      message: [400, 404, 503].includes(err?.status)
+        ? err.message
+        : "Failed to communicate with AI service. Ensure ai-service is healthy.",
     });
   }
 });
@@ -605,7 +765,7 @@ router.get("/:id/clauses", protect, async (req, res) => {
   try {
     const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
-    const clauses = await ClauseModel.find({ document: contract._id }).sort({ createdAt: 1 });
+    const clauses = await ClauseModel.find({ document: contract._id }).sort({ pageNumber: 1, createdAt: 1 });
     res.json({ contractId: contract._id, title: contract.title, count: clauses.length, clauses });
   } catch (err) {
     console.error("Get clauses error:", err.message);
@@ -617,19 +777,24 @@ router.post("/:id/clauses/:clauseId/suggest-redline", protect, aiLimiter, async 
   try {
     const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
-    if (!mongoose.Types.ObjectId.isValid(req.params.clauseId)) return res.status(400).json({ message: "Invalid clause ID." });
+    if (!mongoose.Types.ObjectId.isValid(req.params.clauseId)) {
+      return res.status(400).json({ message: "Invalid clause ID." });
+    }
 
     const clause = await ClauseModel.findOne({ _id: req.params.clauseId, document: contract._id });
     if (!clause) return res.status(404).json({ message: "Clause not found." });
 
     const pb = await PlaybookModel.findOne(
-      req.user.organizationId ? { $or: [{ organization: req.user.organizationId }, { user: req.user._id }] } : { user: req.user._id }
+      req.user.organizationId
+        ? { $or: [{ organization: req.user.organizationId }, { user: req.user._id }] }
+        : { user: req.user._id }
     ).lean();
-    const matchedRule = (pb?.rules || []).find((r) =>
-      r.enabled && r.guidance && (
-        clause.clauseType.toLowerCase().includes(r.target.toLowerCase()) ||
-        r.name.toLowerCase().includes(clause.clauseType.toLowerCase())
-      )
+    const matchedRule = (pb?.rules || []).find(
+      (r) =>
+        r.enabled &&
+        r.guidance &&
+        (clause.clauseType.toLowerCase().includes(r.target.toLowerCase()) ||
+          r.name.toLowerCase().includes(clause.clauseType.toLowerCase()))
     );
 
     const aiRes = await aiClient.request("/api/v1/redline", {
@@ -666,7 +831,10 @@ router.get("/:id/risks", protect, async (req, res) => {
   try {
     const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
-    const flagged = await ClauseModel.find({ document: contract._id, riskLevel: { $in: ["high", "medium"] } }).sort({ createdAt: 1 });
+    const flagged = await ClauseModel.find({
+      document: contract._id,
+      riskLevel: { $in: ["high", "medium"] },
+    }).sort({ createdAt: 1 });
     flagged.sort((a, b) => (a.riskLevel === "high" ? -1 : 1) - (b.riskLevel === "high" ? -1 : 1));
     res.json({
       contractId: contract._id,
@@ -686,7 +854,10 @@ router.get("/:id/qa", protect, async (req, res) => {
   try {
     const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
-    const history = await QuestionAnswerModel.find({ user: req.user._id, document: contract._id }).sort({ createdAt: -1 }).limit(20).lean();
+    const history = await QuestionAnswerModel.find({ user: req.user._id, document: contract._id })
+      .sort({ createdAt: -1 })
+      .limit(25)
+      .lean();
     const fbs = history.length
       ? await FeedbackModel.find({ user: req.user._id, questionAnswer: { $in: history.map((h) => h._id) } }).lean()
       : [];
@@ -705,7 +876,7 @@ router.get("/:id/summary", protect, async (req, res) => {
     if (!contract) return;
     const clauseCount = await ClauseModel.countDocuments({ document: contract._id });
     res.json({
-      contract: stripPath(contract),
+      contract: sanitizeContractResponse(contract),
       metrics: {
         clauseCount,
         pageCount: contract.pageCount || 1,
@@ -728,9 +899,18 @@ router.get("/:id/report", protect, async (req, res) => {
   try {
     const contract = await loadContract(req.params.id, req.user, res);
     if (!contract) return;
-    const clauses = await ClauseModel.find({ document: contract._id }).sort({ createdAt: 1 });
-    const safeName = (contract.title || "contract").replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "contract";
-    recordAudit(req, { action: "export_report", resourceType: "contract", resourceId: contract._id, summary: `Exported Markdown report for "${contract.title}"` });
+    const clauses = await ClauseModel.find({ document: contract._id }).sort({ pageNumber: 1, createdAt: 1 });
+    const safeName =
+      (contract.title || "contract")
+        .replace(/[^a-zA-Z0-9_-]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 60) || "contract";
+    recordAudit(req, {
+      action: "export_report",
+      resourceType: "contract",
+      resourceId: contract._id,
+      summary: `Exported Markdown report for "${contract.title}"`,
+    });
     res.setHeader("Content-Type", "text/markdown; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${safeName}_analysis_report.md"`);
     res.send(buildReportMarkdown(contract, clauses));
@@ -743,40 +923,73 @@ router.get("/:id/report", protect, async (req, res) => {
 router.post("/:id/ask", protect, aiLimiter, async (req, res) => {
   const started = Date.now();
   try {
-    const contract = await loadContract(req.params.id, req.user, res);
+    const contract = await loadContract(req.params.id, req.user, res, { includeFullText: true });
     if (!contract) return;
-    const { query, top_k = 5, min_score = 0.25, use_reranker = true } = req.body || {};
+
+    const { query, top_k = 6, min_score = 0.22, use_reranker = true, history = [] } = req.body || {};
     const q = String(query || "").trim().slice(0, 600);
     if (!q) return res.status(400).json({ message: "Question query is required." });
 
-    const kVal = Math.min(20, Math.max(1, Number(top_k) || 5));
-    const minVal = Math.min(1, Math.max(0, Number(min_score) || 0.25));
+    const kVal = Math.min(20, Math.max(1, Number(top_k) || 6));
+    const minVal = Math.min(1, Math.max(0, Number(min_score) || 0.22));
     const rerank = Boolean(use_reranker);
-    const qHash = crypto.createHash("sha256").update(q.toLowerCase()).digest("hex").slice(0, 16);
-    const cacheKey = `qa:${contract._id}:${contract.extractedAt ? new Date(contract.extractedAt).getTime() : 0}:${qHash}:${kVal}:${minVal}:${rerank}`;
+    const cleanHistory = Array.isArray(history)
+      ? history
+          .filter((h) => h && typeof h.query === "string")
+          .slice(-4)
+          .map((h) => ({ query: String(h.query).slice(0, 300), answer: String(h.answer || "").slice(0, 500) }))
+      : [];
 
-    let data = await cacheGetJson(cacheKey);
+    const qHash = crypto.createHash("sha256").update(q.toLowerCase()).digest("hex").slice(0, 16);
+    const cacheKey = `qa:v2:${contract._id}:${contract.extractedAt ? new Date(contract.extractedAt).getTime() : 0}:${qHash}:${kVal}:${minVal}:${rerank}`;
+
+    let data = cleanHistory.length === 0 ? await cacheGetJson(cacheKey) : null;
     const cached = Boolean(data);
 
     if (!data) {
-      const aiRes = await aiClient.request("/api/v1/retrieve", {
+      const baseBody = {
+        query: q,
+        user_id: contract.user.toString(),
+        document_id: contract._id.toString(),
+        document_title: contract.title || contract.fileName,
+        top_k: kVal,
+        min_score: minVal,
+        use_reranker: rerank,
+        conversation_history: cleanHistory.length ? cleanHistory : undefined,
+      };
+
+      let aiRes = await aiClient.request("/api/v1/retrieve", {
         method: "POST",
         requestId: req.requestId,
-        body: {
-          query: q,
-          user_id: contract.user.toString(),
-          document_id: contract._id.toString(),
-          top_k: kVal,
-          min_score: minVal,
-          use_reranker: rerank,
-        },
+        body: baseBody,
       });
       if (!aiRes.ok) {
         const err = await aiRes.json().catch(() => ({}));
         return res.status(aiRes.status).json({ message: err.detail || "AI retrieval request failed." });
       }
       data = await aiRes.json();
-      await cacheSetJson(cacheKey, data, 600);
+
+      // Self-heal automatically if the AI vector store was wiped (e.g., Render free tier restart)
+      // by re-indexing saved MongoDB clauses/text and retrying seamlessly.
+      if (data.total_candidates === 0 || data.needs_reindex) {
+        const storedChunks = await reindexContractFromMongo(contract, req.requestId);
+        if (storedChunks.length) {
+          aiRes = await aiClient.request("/api/v1/retrieve", {
+            method: "POST",
+            requestId: req.requestId,
+            body: {
+              ...baseBody,
+              fallback_chunks: storedChunks,
+            },
+          });
+          if (aiRes.ok) data = await aiRes.json();
+        }
+      }
+
+      // Only cache valid responses (never cache empty-index errors).
+      if (cleanHistory.length === 0 && (data.total_candidates || 0) > 0 && !data.needs_reindex) {
+        await cacheSetJson(cacheKey, data, 600);
+      }
     }
 
     const latencyMs = Date.now() - started;
@@ -786,14 +999,28 @@ router.post("/:id/ask", protect, aiLimiter, async (req, res) => {
       query: q,
       answer: data.answer || "",
       citations: data.citations || [],
+      indianLawRefs: data.indian_law_refs || [],
       confidence: data.confidence || "NONE",
       insufficientInformation: Boolean(data.insufficient_information),
       provider: data.provider || "",
       latencyMs,
     }).catch(() => null);
 
-    recordAudit(req, { action: "ask", resourceType: "contract", resourceId: contract._id, summary: `Asked "${contract.title}": "${q.slice(0, 65)}"${cached ? " (cached)" : ""}` });
-    res.json({ qaId: qa?._id || null, contractId: contract._id, contractTitle: contract.title, fileName: contract.fileName, latencyMs, cached, ...data });
+    recordAudit(req, {
+      action: "ask",
+      resourceType: "contract",
+      resourceId: contract._id,
+      summary: `Asked "${contract.title}": "${q.slice(0, 65)}"${cached ? " (cached)" : ""}`,
+    });
+    res.json({
+      qaId: qa?._id || null,
+      contractId: contract._id,
+      contractTitle: contract.title,
+      fileName: contract.fileName,
+      latencyMs,
+      cached,
+      ...data,
+    });
   } catch (err) {
     console.error("Contract Q&A error:", err.message);
     res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to run contract Q&A." });

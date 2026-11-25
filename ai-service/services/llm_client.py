@@ -11,16 +11,26 @@ load_dotenv()
 
 T = TypeVar("T", bound=BaseModel)
 
-DEFAULT_GEMINI_MODELS = (
-    "gemini-3.5-flash-lite",
+FAST_GEMINI_MODELS = (
     "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
+)
+BALANCED_GEMINI_MODELS = (
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+)
+STRONG_GEMINI_MODELS = (
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
 )
 MODEL_COOLDOWN_SECONDS = 90.0
 
 
 class LLMClient:
-    """Gemini (google-genai models API) & OpenAI LLM wrapper with bounded latency and cooldowns."""
+    """Wrapper around Gemini (google-genai) and OpenAI with per-model cooldowns and bounded latency."""
 
     def __init__(self) -> None:
         self._disabled_gemini_keys: set[str] = set()
@@ -40,6 +50,9 @@ class LLMClient:
             return None
         return key
 
+    def is_llm_available(self) -> bool:
+        return bool(self._get_gemini_key() or self._get_openai_key())
+
     def _get_genai_client(self, api_key: str):
         if api_key not in self._clients:
             from google import genai
@@ -47,17 +60,19 @@ class LLMClient:
 
             self._clients[api_key] = genai.Client(
                 api_key=api_key,
-                http_options=types.HttpOptions(timeout=18_000),
+                http_options=types.HttpOptions(timeout=35_000),
             )
         return self._clients[api_key]
 
     def _model_candidates(self, tier: str = "balanced") -> tuple[str, ...]:
         override = os.environ.get("GEMINI_LLM_MODEL", "").strip()
-        ordered = (
-            ("gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
-            if tier == "strong"
-            else DEFAULT_GEMINI_MODELS
-        )
+        if tier == "strong":
+            ordered = STRONG_GEMINI_MODELS
+        elif tier == "fast":
+            ordered = FAST_GEMINI_MODELS
+        else:
+            ordered = BALANCED_GEMINI_MODELS
+
         if override:
             return (override, *(m for m in ordered if m != override))
         return ordered
@@ -73,18 +88,23 @@ class LLMClient:
         self,
         prompt: str,
         system_instruction: Optional[str] = None,
-        max_output_tokens: int = 1024,
-        timeout: float = 15.0,
+        max_output_tokens: int = 1200,
+        timeout: float = 20.0,
         tier: str = "balanced",
     ) -> Optional[str]:
         gemini_key = self._get_gemini_key()
         if gemini_key:
-            text = self._call_gemini(gemini_key, prompt, system_instruction, max_output_tokens, None, timeout, tier)
+            text = self._call_gemini(
+                gemini_key, prompt, system_instruction, max_output_tokens, None, timeout, tier
+            )
             if text:
                 return text
+
         openai_key = self._get_openai_key()
         if openai_key:
-            return self._call_openai(openai_key, prompt, system_instruction, max_output_tokens, False, timeout)
+            return self._call_openai(
+                openai_key, prompt, system_instruction, max_output_tokens, False, timeout
+            )
         return None
 
     def generate_structured(
@@ -92,26 +112,33 @@ class LLMClient:
         prompt: str,
         schema: Type[T],
         system_instruction: Optional[str] = None,
-        max_output_tokens: int = 1600,
-        timeout: float = 18.0,
+        max_output_tokens: int = 1800,
+        timeout: float = 24.0,
         tier: str = "balanced",
     ) -> Optional[T]:
         gemini_key = self._get_gemini_key()
         if gemini_key:
-            raw = self._call_gemini(gemini_key, prompt, system_instruction, max_output_tokens, schema, timeout, tier)
+            raw = self._call_gemini(
+                gemini_key, prompt, system_instruction, max_output_tokens, schema, timeout, tier
+            )
             parsed = self._parse_schema(raw, schema) if raw else None
             if parsed is not None:
                 return parsed
 
         openai_key = self._get_openai_key()
         if openai_key:
-            schema_prompt = f"{prompt}\n\nRespond ONLY with valid JSON matching this schema:\n{json.dumps(schema.model_json_schema())}"
-            raw = self._call_openai(openai_key, schema_prompt, system_instruction, max_output_tokens, True, timeout)
+            schema_prompt = (
+                f"{prompt}\n\nRespond ONLY with valid JSON matching this schema:\n"
+                f"{json.dumps(schema.model_json_schema())}"
+            )
+            raw = self._call_openai(
+                openai_key, schema_prompt, system_instruction, max_output_tokens, True, timeout
+            )
             if raw:
                 return self._parse_schema(raw, schema)
         return None
 
-    def ocr_pdf_bytes(self, pdf_bytes: bytes, timeout: float = 30.0) -> Optional[list[str]]:
+    def ocr_pdf_bytes(self, pdf_bytes: bytes, timeout: float = 35.0) -> Optional[list[str]]:
         gemini_key = self._get_gemini_key()
         if not gemini_key or not pdf_bytes:
             return None
@@ -205,15 +232,24 @@ class LLMClient:
         json_mode: bool,
         timeout: float,
     ) -> Optional[str]:
-        messages = ([{"role": "system", "content": system_instruction}] if system_instruction else []) + [
-            {"role": "user", "content": prompt}
-        ]
-        payload: dict = {"model": "gpt-4o-mini", "messages": messages, "temperature": 0.1, "max_tokens": max_output_tokens}
+        messages = (
+            [{"role": "system", "content": system_instruction}] if system_instruction else []
+        ) + [{"role": "user", "content": prompt}]
+        payload: dict = {
+            "model": "gpt-4o-mini",
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": max_output_tokens,
+        }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         try:
             with httpx.Client(timeout=timeout) as client:
-                resp = client.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+                resp = client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json=payload,
+                )
                 if resp.status_code == 200:
                     return resp.json()["choices"][0]["message"]["content"].strip()
                 if resp.status_code in (401, 403):
