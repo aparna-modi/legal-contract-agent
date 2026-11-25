@@ -75,7 +75,7 @@ class ExtractPathRequest(BaseModel):
 
 
 class EmbedRequest(BaseModel):
-    texts: list[str]
+    texts: list[str] = Field(..., max_length=200)
     task_type: str = "RETRIEVAL_DOCUMENT"
 
 
@@ -87,27 +87,27 @@ class EmbedResponse(BaseModel):
 
 
 class SimilarityRequest(BaseModel):
-    text_a: str
-    text_b: str
+    text_a: str = Field(..., max_length=20_000)
+    text_b: str = Field(..., max_length=20_000)
 
 
 class VectorIndexRequest(BaseModel):
-    user_id: str
-    document_id: str
-    chunks: List[Dict[str, Any]]
+    user_id: str = Field(..., min_length=1, max_length=128)
+    document_id: str = Field(..., min_length=1, max_length=128)
+    chunks: List[Dict[str, Any]] = Field(..., max_length=1000)
     replace: bool = False
 
 
 class VectorDeleteRequest(BaseModel):
-    user_id: str
-    document_id: Optional[str] = None
+    user_id: str = Field(..., min_length=1, max_length=128)
+    document_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class RetrieveRequest(BaseModel):
-    query: str
-    user_id: str
-    document_id: Optional[str] = None
-    document_title: Optional[str] = None
+    query: str = Field(..., max_length=1000)
+    user_id: str = Field(..., min_length=1, max_length=128)
+    document_id: Optional[str] = Field(default=None, max_length=128)
+    document_title: Optional[str] = Field(default=None, max_length=240)
     top_k: int = Field(5, ge=1, le=50)
     min_score: float = Field(0.25, ge=0.0, le=1.0)
     use_reranker: bool = True
@@ -116,24 +116,24 @@ class RetrieveRequest(BaseModel):
 
 
 class AnalyzeContractRequest(BaseModel):
-    document_name: str
-    full_text: str
-    classified_clauses: List[Dict[str, Any]] = Field(default_factory=list)
+    document_name: str = Field(..., min_length=1, max_length=240)
+    full_text: str = Field(..., max_length=500_000)
+    classified_clauses: List[Dict[str, Any]] = Field(default_factory=list, max_length=1000)
 
 
 class CompareContractsRequest(BaseModel):
-    contract_a_title: str
-    clauses_a: List[Dict[str, Any]]
-    contract_b_title: str
-    clauses_b: List[Dict[str, Any]]
+    contract_a_title: str = Field(..., min_length=1, max_length=240)
+    clauses_a: List[Dict[str, Any]] = Field(default_factory=list, max_length=1000)
+    contract_b_title: str = Field(..., min_length=1, max_length=240)
+    clauses_b: List[Dict[str, Any]] = Field(default_factory=list, max_length=1000)
 
 
 class RedlineRequest(BaseModel):
-    clause_type: str
-    clause_text: str
-    risk_level: str = "high"
-    risk_reason: str = ""
-    playbook_guidance: str = ""
+    clause_type: str = Field(..., min_length=1, max_length=120)
+    clause_text: str = Field(..., min_length=1, max_length=10_000)
+    risk_level: str = Field(default="high", max_length=20)
+    risk_reason: str = Field(default="", max_length=1000)
+    playbook_guidance: str = Field(default="", max_length=1000)
 
 
 class PlaybookEvaluateRequest(BaseModel):

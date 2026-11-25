@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 from typing import Optional, Type, TypeVar
@@ -8,6 +9,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -22,11 +24,12 @@ BALANCED_GEMINI_MODELS = (
     "gemini-3.5-flash",
 )
 STRONG_GEMINI_MODELS = (
-    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
 )
-MODEL_COOLDOWN_SECONDS = 90.0
+MODEL_TRANSIENT_COOLDOWN_SECONDS = 15.0
+MODEL_NOT_FOUND_COOLDOWN_SECONDS = 300.0
 
 
 class LLMClient:
@@ -154,6 +157,8 @@ class LLMClient:
             )
             pdf_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
             for model in self._model_candidates():
+                if self._model_cooldowns.get(model, 0.0) > time.monotonic():
+                    continue
                 try:
                     resp = client.models.generate_content(model=model, contents=[pdf_part, prompt])
                     text = getattr(resp, "text", None)
@@ -162,10 +167,16 @@ class LLMClient:
                         return pages or [text.strip()]
                 except Exception as exc:
                     msg = str(exc).lower()
+                    logger.warning("Gemini OCR failed on model=%s: %s", model, type(exc).__name__)
                     if any(k in msg for k in ("api key", "401", "403")):
                         self._disabled_gemini_keys.add(gemini_key)
                         return None
-        except Exception:
+                    if any(k in msg for k in ("not found", "404")):
+                        self._model_cooldowns[model] = time.monotonic() + MODEL_NOT_FOUND_COOLDOWN_SECONDS
+                    elif any(k in msg for k in ("503", "429", "quota", "timeout", "timed out")):
+                        self._model_cooldowns[model] = time.monotonic() + MODEL_TRANSIENT_COOLDOWN_SECONDS
+        except Exception as exc:
+            logger.warning("Gemini OCR aborted: %s", type(exc).__name__)
             return None
         return None
 
@@ -204,23 +215,32 @@ class LLMClient:
                 cfg_kwargs["response_mime_type"] = "application/json"
                 cfg_kwargs["response_schema"] = response_schema
 
-            try:
-                resp = client.models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(**cfg_kwargs),
-                )
-                output = getattr(resp, "text", None)
-                if output and output.strip():
-                    return output.strip()
-            except Exception as exc:
-                msg = str(exc).lower()
-                if any(k in msg for k in ("api key", "401", "403", "permission")):
-                    self._disabled_gemini_keys.add(api_key)
-                    return None
-                if any(k in msg for k in ("503", "429", "quota", "timeout", "timed out", "not found", "404")):
-                    self._model_cooldowns[model] = time.monotonic() + MODEL_COOLDOWN_SECONDS
-                continue
+            for attempt in range(2):
+                try:
+                    resp = client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(**cfg_kwargs),
+                    )
+                    output = getattr(resp, "text", None)
+                    if output and output.strip():
+                        return output.strip()
+                    break
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    logger.warning("Gemini call failed model=%s attempt=%d: %s", model, attempt + 1, type(exc).__name__)
+                    if any(k in msg for k in ("api key", "401", "403", "permission")):
+                        self._disabled_gemini_keys.add(api_key)
+                        return None
+                    is_transient = any(k in msg for k in ("503", "429", "timeout", "timed out", "unavailable"))
+                    if is_transient and attempt == 0 and (deadline - time.monotonic()) > 4.0:
+                        time.sleep(0.8)
+                        continue
+                    if any(k in msg for k in ("not found", "404")):
+                        self._model_cooldowns[model] = time.monotonic() + MODEL_NOT_FOUND_COOLDOWN_SECONDS
+                    elif any(k in msg for k in ("503", "429", "quota", "timeout", "timed out")):
+                        self._model_cooldowns[model] = time.monotonic() + MODEL_TRANSIENT_COOLDOWN_SECONDS
+                    break
         return None
 
     def _call_openai(

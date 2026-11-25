@@ -84,8 +84,8 @@ NOISE_HEADING_LABELS = {
 RISK_PATTERNS: Dict[str, List[Tuple[re.Pattern, str]]] = {
     "high": [
         (
-            re.compile(r"\b(?:liquidated damages of|interest at (?:1[5-9]|[2-9]\d)%|forfeit (?:a sum|all|the )?(?:deposit|amount|advance)?|terminate immediately without (?:prior )?notice|without limitation|unlimited liability|uncapped liability)\b", re.I),
-            "Exposes a party to steep financial penalties, deposit forfeiture, uncapped liability, or immediate termination without notice.",
+            re.compile(r"\b(?:liquidated damages of|interest at (?:1[5-9]|[2-9]\d)%|late fee(?:s)? (?:of )?(?:[3-9]|\d{2})%|forfeit (?:a sum|all|the )?(?:deposit|amount|advance)?|terminate immediately without (?:prior )?notice|terminate at any time without (?:cause|notice)|unilateral(?:ly)? terminat|without limitation|unlimited liability|uncapped liability)\b", re.I),
+            "Exposes a party to steep financial penalties, high late fees, deposit forfeiture, uncapped liability, or one-sided/immediate termination without notice.",
         ),
         (
             re.compile(r"\b(?:indemnif(?:y|ication).{0,100}against any and all claims|broad third[- ]party claims?|indemnify.{0,40}negligence)\b", re.I),
@@ -110,8 +110,8 @@ RISK_PATTERNS: Dict[str, List[Tuple[re.Pattern, str]]] = {
             "Automatic renewal clause that can lock parties into another term if cancellation notice is missed.",
         ),
         (
-            re.compile(r"\b(?:specific performance|subject to receipt of a satisfactory legal title|as[- ]is without warranty|borne solely by the purchaser)\b", re.I),
-            "Conditional obligation, sole cost allocation, warranty disclaimer, or equitable specific-performance remedy under the Specific Relief Act, 1963.",
+            re.compile(r"\b(?:specific performance|subject to receipt of a satisfactory legal title|as[- ]is without warranty|borne solely by the purchaser|appropriate jurisdiction|applicable laws? as determined by|mutually agreed later)\b", re.I),
+            "Conditional obligation, sole cost allocation, vague governing law/jurisdiction, warranty disclaimer, or equitable specific-performance remedy.",
         ),
     ],
 }

@@ -10,8 +10,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN mkdir -p /app/chroma_db
+RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p /app/chroma_db \
+    && chown -R appuser:appuser /app/chroma_db
 
+USER appuser
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
