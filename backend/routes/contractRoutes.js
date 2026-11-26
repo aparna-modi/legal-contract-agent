@@ -13,7 +13,7 @@ const PlaybookModel = require("../models/Playbook");
 const { protect } = require("../middleware/authMiddleware");
 const { aiLimiter, uploadLimiter } = require("../middleware/rateLimiters");
 const { recordAudit } = require("../utils/audit");
-const { aiClient } = require("../utils/aiClient");
+const { aiClient, extractAiErrorMessage } = require("../utils/aiClient");
 const { storageService } = require("../utils/storage");
 const { extractionQueue } = require("../utils/jobQueue");
 const { cacheGetJson, cacheSetJson } = require("../utils/redisStore");
@@ -181,8 +181,7 @@ async function runExtraction(contract, req, onProgress = () => {}) {
   });
 
   if (!aiRes.ok) {
-    const errData = await aiRes.json().catch(() => ({}));
-    const detail = errData.detail || "AI service failed to parse contract.";
+    const detail = await extractAiErrorMessage(aiRes, "AI service failed to parse contract.");
     contract.status = "failed";
     contract.jobProgress = { stage: "failed", percent: 100, message: detail };
     await contract.save();
@@ -204,7 +203,7 @@ async function runExtraction(contract, req, onProgress = () => {}) {
     const res = await aiClient.request("/api/v1/analyze", {
       method: "POST",
       requestId: req?.requestId || "",
-      timeoutMs: 60000,
+      timeoutMs: 90000,
       body: {
         document_name: contract.title || contract.fileName,
         full_text: ext.full_text || "",
@@ -452,6 +451,7 @@ router.post("/upload", protect, uploadLimiter, (req, res) => {
 
 router.get("/", protect, async (req, res) => {
   try {
+    aiClient.ensureWarmBackground();
     const filter = req.user.organizationId
       ? { $or: [{ user: req.user._id }, { organization: req.user.organizationId, visibility: "team" }] }
       : { user: req.user._id };
@@ -486,11 +486,12 @@ router.post("/search", protect, aiLimiter, async (req, res) => {
     let aiRes = await aiClient.request("/api/v1/retrieve", {
       method: "POST",
       requestId: req.requestId,
+      timeoutMs: 90000,
       body: payload,
     });
     if (!aiRes.ok) {
-      const err = await aiRes.json().catch(() => ({}));
-      return res.status(aiRes.status).json({ message: err.detail || "AI search request failed." });
+      const message = await extractAiErrorMessage(aiRes, "AI search request failed.");
+      return res.status(aiRes.status).json({ message });
     }
 
     let data = await aiRes.json();
@@ -588,7 +589,7 @@ router.post("/compare", protect, aiLimiter, async (req, res) => {
     const aiRes = await aiClient.request("/api/v1/compare", {
       method: "POST",
       requestId: req.requestId,
-      timeoutMs: 60000,
+      timeoutMs: 90000,
       body: {
         contract_a_title: contractA.title || contractA.fileName,
         clauses_a: clausesA.map(toPayload),
@@ -597,8 +598,8 @@ router.post("/compare", protect, aiLimiter, async (req, res) => {
       },
     });
     if (!aiRes.ok) {
-      const err = await aiRes.json().catch(() => ({}));
-      return res.status(aiRes.status).json({ message: err.detail || "AI service failed to compare contracts." });
+      const message = await extractAiErrorMessage(aiRes, "AI service failed to compare contracts.");
+      return res.status(aiRes.status).json({ message });
     }
 
     const comparison = await aiRes.json();
@@ -615,17 +616,28 @@ router.post("/compare", protect, aiLimiter, async (req, res) => {
   }
 });
 
+const FALLBACK_DRAFT_TEMPLATES = [
+  { id: "msa", label: "Master Services Agreement (MSA)", description: "B2B services or consulting framework with SOWs, fees, IP ownership, liability cap, and termination.", default_term: "12 months from Effective Date", default_notice: "30 days prior written notice" },
+  { id: "nda", label: "Mutual Non-Disclosure Agreement (NDA)", description: "Reciprocal confidentiality protecting trade secrets, product roadmaps, and commercial negotiations.", default_term: "3 years from Effective Date", default_notice: "15 days prior written notice" },
+  { id: "saas", label: "SaaS Subscription Agreement", description: "Cloud software subscription covering uptime SLA, data security, seats, billing, renewal caps, and exit data export.", default_term: "12 months (non-evergreen)", default_notice: "30 days prior written notice" },
+  { id: "dpa", label: "Data Processing Agreement (DPA)", description: "DPDP Act & GDPR-aligned processor obligations, breach notice windows, sub-processors, and deletion on exit.", default_term: "Co-terminous with Master Agreement", default_notice: "30 days prior written notice" },
+  { id: "employment", label: "Employment Agreement", description: "Full-time employment terms covering role, compensation, probation, IP assignment, confidentiality, and exit.", default_term: "Continuing until terminated", default_notice: "30 days prior written notice" },
+  { id: "contractor", label: "Independent Contractor Agreement", description: "Freelance or consulting contract with milestones, conditional IP transfer upon payment, and kill fee.", default_term: "6 months or completion of deliverables", default_notice: "14 days prior written notice" },
+  { id: "lease", label: "Commercial Lease Agreement", description: "Premises lease covering rent, security deposit, maintenance, lock-in period, and peaceful handover.", default_term: "24 months from Commencement Date", default_notice: "60 days prior written notice" },
+];
+
 router.get("/draft/templates", protect, async (req, res) => {
   try {
+    aiClient.ensureWarmBackground({ minIntervalMs: 30000 });
     const aiRes = await aiClient.request("/api/v1/draft/templates", {
       requestId: req.requestId,
-      timeoutMs: 8000,
+      timeoutMs: 12000,
+      waitForWakeup: false,
     });
-    if (!aiRes.ok) return res.status(502).json({ message: "Unable to load contract templates." });
-    res.json(await aiRes.json());
-  } catch (err) {
-    console.error("Draft templates error:", err.message);
-    res.status(err?.status || 500).json({ message: "Failed to load contract drafting templates." });
+    if (aiRes.ok) return res.json(await aiRes.json());
+    return res.json({ templates: FALLBACK_DRAFT_TEMPLATES, source: "gateway-fallback" });
+  } catch {
+    return res.json({ templates: FALLBACK_DRAFT_TEMPLATES, source: "gateway-fallback" });
   }
 });
 
@@ -646,7 +658,7 @@ router.post("/draft", protect, aiLimiter, async (req, res) => {
     const aiRes = await aiClient.request("/api/v1/draft", {
       method: "POST",
       requestId: req.requestId,
-      timeoutMs: 60000,
+      timeoutMs: 90000,
       body: {
         contract_type: String(contractType).slice(0, 40),
         title: String(title).slice(0, 180),
@@ -661,8 +673,8 @@ router.post("/draft", protect, aiLimiter, async (req, res) => {
       },
     });
     if (!aiRes.ok) {
-      const err = await aiRes.json().catch(() => ({}));
-      return res.status(aiRes.status).json({ message: err.detail || "AI drafting request failed." });
+      const message = await extractAiErrorMessage(aiRes, "AI drafting request failed.");
+      return res.status(aiRes.status).json({ message });
     }
     const draft = await aiRes.json();
     recordAudit(req, {
@@ -693,7 +705,7 @@ router.post("/draft/revise", protect, aiLimiter, async (req, res) => {
     const aiRes = await aiClient.request("/api/v1/draft/revise", {
       method: "POST",
       requestId: req.requestId,
-      timeoutMs: 60000,
+      timeoutMs: 90000,
       body: {
         title,
         current_text: currentText.slice(0, 60000),
@@ -702,8 +714,8 @@ router.post("/draft/revise", protect, aiLimiter, async (req, res) => {
       },
     });
     if (!aiRes.ok) {
-      const err = await aiRes.json().catch(() => ({}));
-      return res.status(aiRes.status).json({ message: err.detail || "AI draft revision failed." });
+      const message = await extractAiErrorMessage(aiRes, "AI draft revision failed.");
+      return res.status(aiRes.status).json({ message });
     }
     const revised = await aiRes.json();
     recordAudit(req, {
@@ -732,6 +744,7 @@ router.post("/clauses/redline-adhoc", protect, aiLimiter, async (req, res) => {
     const aiRes = await aiClient.request("/api/v1/redline", {
       method: "POST",
       requestId: req.requestId,
+      timeoutMs: 90000,
       body: {
         clause_type: clauseType,
         clause_text: clauseText.slice(0, 10000),
@@ -742,8 +755,8 @@ router.post("/clauses/redline-adhoc", protect, aiLimiter, async (req, res) => {
       },
     });
     if (!aiRes.ok) {
-      const err = await aiRes.json().catch(() => ({}));
-      return res.status(aiRes.status).json({ message: err.detail || "Could not draft counter-redline." });
+      const message = await extractAiErrorMessage(aiRes, "Could not draft counter-redline.");
+      return res.status(aiRes.status).json({ message });
     }
     const suggestion = await aiRes.json();
     recordAudit(req, {
@@ -754,7 +767,7 @@ router.post("/clauses/redline-adhoc", protect, aiLimiter, async (req, res) => {
     res.json(suggestion);
   } catch (err) {
     console.error("Ad-hoc redline error:", err.message);
-    res.status(err?.status || 500).json({ message: "Failed to generate counter-redline." });
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to generate counter-redline." });
   }
 });
 
@@ -818,7 +831,7 @@ router.post("/draft/save", protect, uploadLimiter, async (req, res) => {
     });
   } catch (err) {
     console.error("Save draft error:", err.message);
-    res.status(err?.status || 500).json({ message: "Failed to save contract draft." });
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to save contract draft." });
   }
 });
 
@@ -1037,6 +1050,7 @@ router.post("/:id/clauses/:clauseId/suggest-redline", protect, aiLimiter, async 
     const aiRes = await aiClient.request("/api/v1/redline", {
       method: "POST",
       requestId: req.requestId,
+      timeoutMs: 90000,
       body: {
         clause_type: clause.clauseType,
         clause_text: clause.text,
@@ -1048,8 +1062,8 @@ router.post("/:id/clauses/:clauseId/suggest-redline", protect, aiLimiter, async 
       },
     });
     if (!aiRes.ok) {
-      const err = await aiRes.json().catch(() => ({}));
-      return res.status(aiRes.status).json({ message: err.detail || "Could not draft redline." });
+      const message = await extractAiErrorMessage(aiRes, "Could not draft redline.");
+      return res.status(aiRes.status).json({ message });
     }
 
     const suggestion = await aiRes.json();
@@ -1062,7 +1076,7 @@ router.post("/:id/clauses/:clauseId/suggest-redline", protect, aiLimiter, async 
     res.json({ clauseId: clause._id, ...suggestion });
   } catch (err) {
     console.error("Redline suggestion error:", err.message);
-    res.status(err?.status || 500).json({ message: "Failed to generate clause redline suggestion." });
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to generate clause redline suggestion." });
   }
 });
 
@@ -1079,7 +1093,7 @@ router.post("/:id/draft-missing-clause", protect, aiLimiter, async (req, res) =>
     const aiRes = await aiClient.request("/api/v1/draft-clause", {
       method: "POST",
       requestId: req.requestId,
-      timeoutMs: 40000,
+      timeoutMs: 90000,
       body: {
         clause_type: cleanType,
         document_name: contract.title || contract.fileName,
@@ -1090,8 +1104,8 @@ router.post("/:id/draft-missing-clause", protect, aiLimiter, async (req, res) =>
       },
     });
     if (!aiRes.ok) {
-      const err = await aiRes.json().catch(() => ({}));
-      return res.status(aiRes.status).json({ message: err.detail || "Could not draft missing clause." });
+      const message = await extractAiErrorMessage(aiRes, "Could not draft missing clause.");
+      return res.status(aiRes.status).json({ message });
     }
 
     const drafted = await aiRes.json();
@@ -1104,7 +1118,7 @@ router.post("/:id/draft-missing-clause", protect, aiLimiter, async (req, res) =>
     res.json({ contractId: contract._id, ...drafted });
   } catch (err) {
     console.error("Draft missing clause error:", err.message);
-    res.status(err?.status || 500).json({ message: "Failed to draft missing clause." });
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to draft missing clause." });
   }
 });
 
@@ -1242,11 +1256,12 @@ router.post("/:id/ask", protect, aiLimiter, async (req, res) => {
       let aiRes = await aiClient.request("/api/v1/retrieve", {
         method: "POST",
         requestId: req.requestId,
+        timeoutMs: 90000,
         body: baseBody,
       });
       if (!aiRes.ok) {
-        const err = await aiRes.json().catch(() => ({}));
-        return res.status(aiRes.status).json({ message: err.detail || "AI retrieval request failed." });
+        const message = await extractAiErrorMessage(aiRes, "AI retrieval request failed.");
+        return res.status(aiRes.status).json({ message });
       }
       data = await aiRes.json();
 
@@ -1258,6 +1273,7 @@ router.post("/:id/ask", protect, aiLimiter, async (req, res) => {
           aiRes = await aiClient.request("/api/v1/retrieve", {
             method: "POST",
             requestId: req.requestId,
+            timeoutMs: 90000,
             body: {
               ...baseBody,
               fallback_chunks: storedChunks,

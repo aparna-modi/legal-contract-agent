@@ -49,7 +49,9 @@ LEGAL_KEYWORDS = {
 }
 
 DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001"
+DEFAULT_EMBEDDING_MODELS = ("gemini-embedding-001", "gemini-embedding-2")
 EMBED_QUOTA_COOLDOWN_SECONDS = 90.0
+EMBED_NOT_FOUND_COOLDOWN_SECONDS = 300.0
 
 
 def l2_normalize(vec: List[float]) -> List[float]:
@@ -134,7 +136,16 @@ class EmbeddingService:
         self._disabled_openai_keys: set[str] = set()
         self._model_cooldowns: dict[str, float] = {}
         self._genai_clients: dict[str, object] = {}
+        self._last_used_model: Optional[str] = None
         self.last_used_neural: bool = False
+
+    def _model_candidates(self) -> tuple[str, ...]:
+        override = (os.environ.get("GEMINI_EMBEDDING_MODEL") or self.model_name or DEFAULT_EMBEDDING_MODEL).strip()
+        ordered = [override] if override else []
+        for candidate in DEFAULT_EMBEDDING_MODELS:
+            if candidate not in ordered:
+                ordered.append(candidate)
+        return tuple(ordered)
 
     def _active_gemini_key(self) -> Optional[str]:
         key = os.environ.get("GEMINI_API_KEY")
@@ -155,8 +166,12 @@ class EmbeddingService:
     def _get_genai_client(self, api_key: str):
         if api_key not in self._genai_clients:
             from google import genai
+            from google.genai import types
 
-            self._genai_clients[api_key] = genai.Client(api_key=api_key)
+            self._genai_clients[api_key] = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=20_000),
+            )
         return self._genai_clients[api_key]
 
     def is_neural_provider(self) -> bool:
@@ -164,7 +179,12 @@ class EmbeddingService:
 
     def get_provider_name(self) -> str:
         if self._active_gemini_key():
-            return f"gemini ({self.model_name} | {self.dimension}-dim)"
+            now = time.monotonic()
+            candidates = self._model_candidates()
+            active_model = self._last_used_model if (self._last_used_model and self._model_cooldowns.get(self._last_used_model, 0.0) <= now) else None
+            if not active_model:
+                active_model = next((m for m in candidates if self._model_cooldowns.get(m, 0.0) <= now), candidates[0])
+            return f"gemini ({active_model} | {self.dimension}-dim)"
         if self._active_openai_key():
             return f"openai (text-embedding-3-small | {self.dimension}-dim)"
         return f"local-legal-vectorizer ({self.dimension}-dim)"
@@ -181,57 +201,91 @@ class EmbeddingService:
         try:
             from google.genai import types
 
-            model_id = self.model_name
-            if self._model_cooldowns.get(model_id, 0.0) > time.monotonic():
-                return None
-
             client = self._get_genai_client(api_key)
-            results: List[List[float]] = []
-
-            # Gemini batch embed supports up to 100 items per request; keep slices at 50.
-            batch_size = 50
-            for start in range(0, len(texts), batch_size):
-                slice_texts = [t if t and t.strip() else " " for t in texts[start : start + batch_size]]
-                config = types.EmbedContentConfig(
-                    output_dimensionality=self.dimension,
-                    task_type=task_type,
-                )
-                response = None
-                for attempt in range(2):
-                    try:
-                        response = client.models.embed_content(
-                            model=model_id,
-                            contents=slice_texts,
-                            config=config,
-                        )
-                        break
-                    except Exception as call_exc:
-                        call_msg = str(call_exc).lower()
-                        if any(tok in call_msg for tok in ("429", "quota", "resource_exhausted")):
-                            self._model_cooldowns[model_id] = time.monotonic() + EMBED_QUOTA_COOLDOWN_SECONDS
-                            return None
-                        if any(tok in call_msg for tok in ("503", "unavailable", "timeout")) and attempt == 0:
-                            time.sleep(0.8)
-                            continue
-                        raise
-                embeddings = getattr(response, "embeddings", None) or []
-                if len(embeddings) != len(slice_texts):
-                    return None
-                for item in embeddings:
-                    vals = list(item.values)
-                    if len(vals) != self.dimension:
-                        return None
-                    # Truncated gemini-embedding-001 vectors (< 3072) must be L2-normalized.
-                    results.append(l2_normalize(vals))
-
-            return results
-        except Exception as exc:
-            err_msg = str(exc).lower()
-            if any(tok in err_msg for tok in ("api key", "401", "403", "404", "not found", "permission")):
-                self._disabled_gemini_keys.add(api_key)
-            elif any(tok in err_msg for tok in ("429", "quota", "resource_exhausted", "503", "timeout")):
-                self._model_cooldowns[self.model_name] = time.monotonic() + EMBED_QUOTA_COOLDOWN_SECONDS
+        except Exception:
             return None
+
+        batch_size = 50
+        for model_id in self._model_candidates():
+            if self._model_cooldowns.get(model_id, 0.0) > time.monotonic():
+                continue
+
+            results: List[List[float]] = []
+            model_failed = False
+            try:
+                for start in range(0, len(texts), batch_size):
+                    slice_texts = [t if t and t.strip() else " " for t in texts[start : start + batch_size]]
+                    # gemini-embedding-2 is multimodal: a plain list of strings is treated as parts of
+                    # a single content item unless each string is wrapped in its own types.Content.
+                    if "embedding-2" in model_id:
+                        contents_payload = [
+                            types.Content(parts=[types.Part.from_text(text=t)]) for t in slice_texts
+                        ]
+                    else:
+                        contents_payload = slice_texts
+                    config = types.EmbedContentConfig(
+                        output_dimensionality=self.dimension,
+                        task_type=task_type,
+                    )
+                    response = None
+                    for attempt in range(2):
+                        try:
+                            response = client.models.embed_content(
+                                model=model_id,
+                                contents=contents_payload,
+                                config=config,
+                            )
+                            break
+                        except Exception as call_exc:
+                            call_msg = str(call_exc).lower()
+                            if any(tok in call_msg for tok in ("api key", "401", "403", "permission")):
+                                self._disabled_gemini_keys.add(api_key)
+                                return None
+                            if any(tok in call_msg for tok in ("429", "quota", "resource_exhausted")):
+                                self._model_cooldowns[model_id] = time.monotonic() + EMBED_QUOTA_COOLDOWN_SECONDS
+                                model_failed = True
+                                break
+                            if any(tok in call_msg for tok in ("404", "not found")):
+                                self._model_cooldowns[model_id] = time.monotonic() + EMBED_NOT_FOUND_COOLDOWN_SECONDS
+                                model_failed = True
+                                break
+                            if any(tok in call_msg for tok in ("503", "unavailable", "timeout", "timed out")) and attempt == 0:
+                                time.sleep(0.6)
+                                continue
+                            model_failed = True
+                            break
+                    if model_failed or response is None:
+                        model_failed = True
+                        break
+                    embeddings = getattr(response, "embeddings", None) or []
+                    if len(embeddings) != len(slice_texts):
+                        model_failed = True
+                        break
+                    for item in embeddings:
+                        vals = list(item.values)
+                        if len(vals) != self.dimension:
+                            model_failed = True
+                            break
+                        # Truncated Gemini embedding vectors (< 3072) must be L2-normalized.
+                        results.append(l2_normalize(vals))
+                    if model_failed:
+                        break
+
+                if not model_failed and len(results) == len(texts):
+                    self._last_used_model = model_id
+                    return results
+            except Exception as exc:
+                err_msg = str(exc).lower()
+                if any(tok in err_msg for tok in ("api key", "401", "403", "permission")):
+                    self._disabled_gemini_keys.add(api_key)
+                    return None
+                if any(tok in err_msg for tok in ("404", "not found")):
+                    self._model_cooldowns[model_id] = time.monotonic() + EMBED_NOT_FOUND_COOLDOWN_SECONDS
+                elif any(tok in err_msg for tok in ("429", "quota", "resource_exhausted", "503", "timeout", "timed out")):
+                    self._model_cooldowns[model_id] = time.monotonic() + EMBED_QUOTA_COOLDOWN_SECONDS
+                continue
+
+        return None
 
     def _embed_with_openai(self, texts: List[str]) -> Optional[List[List[float]]]:
         api_key = self._active_openai_key()

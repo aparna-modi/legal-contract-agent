@@ -33,7 +33,29 @@ async function attemptSilentRefresh() {
   return refreshInFlight;
 }
 
-async function fetchWithAuth(path, { method = "GET", token, headers = {}, body, _retried = false } = {}) {
+const SAFE_RETRY_NON_GET_PREFIXES = [
+  "/api/contracts/draft",
+  "/api/contracts/compare",
+  "/api/contracts/search",
+  "/api/contracts/clauses/redline-adhoc",
+  "/api/playbook/evaluate",
+  "/api/playbook/generate-rules",
+  "/api/system/warmup",
+];
+
+function isSafeToRetryGatewayError(path, method) {
+  if (method === "GET") return true;
+  if (path === "/api/contracts/draft/save" || path === "/api/contracts/upload") return false;
+  if (/^\/api\/contracts\/[^/]+\/(ask|draft-missing-clause|clauses\/[^/]+\/suggest-redline)$/.test(path)) {
+    return true;
+  }
+  return SAFE_RETRY_NON_GET_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
+}
+
+async function fetchWithAuth(
+  path,
+  { method = "GET", token, headers = {}, body, _retried = false, _gatewayRetried = false } = {}
+) {
   const finalHeaders = { ...headers };
   if (token) finalHeaders.Authorization = `Bearer ${token}`;
 
@@ -46,7 +68,16 @@ async function fetchWithAuth(path, { method = "GET", token, headers = {}, body, 
       body,
     });
   } catch {
+    if (!_gatewayRetried && isSafeToRetryGatewayError(path, method)) {
+      await new Promise((r) => setTimeout(r, 2500));
+      return fetchWithAuth(path, { method, token, headers, body, _retried, _gatewayRetried: true });
+    }
     throw new Error("Unable to reach the API server. Please check your connection and try again.");
+  }
+
+  if ([502, 503, 504].includes(response.status) && !_gatewayRetried && isSafeToRetryGatewayError(path, method)) {
+    await new Promise((r) => setTimeout(r, 2500));
+    return fetchWithAuth(path, { method, token, headers, body, _retried, _gatewayRetried: true });
   }
 
   const skipRefreshPaths = [
@@ -66,7 +97,7 @@ async function fetchWithAuth(path, { method = "GET", token, headers = {}, body, 
   if (shouldRefresh) {
     const freshToken = await attemptSilentRefresh();
     if (freshToken) {
-      return fetchWithAuth(path, { method, token: freshToken, headers, body, _retried: true });
+      return fetchWithAuth(path, { method, token: freshToken, headers, body, _retried: true, _gatewayRetried });
     }
     onAuthExpired?.();
   }
@@ -249,6 +280,7 @@ export const analyticsApi = {
 };
 
 export const systemApi = {
+  warmup: (token) => request("/api/system/warmup", { method: "POST", token }),
   status: (token) => request("/api/system/status", { token }),
   adminOverview: (token) => request("/api/system/admin/overview", { token }),
   adminAudit: (token, { page = 1, limit = 10 } = {}) =>

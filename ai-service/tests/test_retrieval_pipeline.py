@@ -197,3 +197,60 @@ def test_self_healing_reindex_from_fallback_chunks(test_retrieval_service):
     assert "B2-P18" in res["answer"]
     assert test_retrieval_service.store.count("user_reheal") == 2
 
+
+def test_retrieval_recovers_in_memory_when_vector_store_raises(test_retrieval_service, monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("Simulated Qdrant 503 outage")
+
+    monkeypatch.setattr(test_retrieval_service.store, "search", boom)
+    monkeypatch.setattr(test_retrieval_service.store, "upsert_chunks", boom)
+    monkeypatch.setattr(test_retrieval_service.store, "get_document_chunks", boom)
+
+    fallback = [
+        {
+            "chunk_id": "mem_1",
+            "text": "Aggregate liability under this Agreement shall not exceed INR 25,00,000.",
+            "section": "7. Limitation of Liability",
+            "clause_type": "Limitation of Liability",
+            "page_number": 4,
+        },
+    ]
+
+    res = test_retrieval_service.retrieve(
+        query="What is the aggregate liability cap?",
+        user_id="user_outage",
+        document_id="doc_outage",
+        top_k=3,
+        min_score=0.15,
+        fallback_chunks=fallback,
+    )
+    assert res["insufficient_information"] is False
+    assert "25,00,000" in res["answer"]
+
+
+def test_out_of_scope_refused_when_llm_falls_back_offline(test_retrieval_service, monkeypatch):
+    chunks = [
+        {
+            "chunk_id": "c1",
+            "text": "This agreement is governed by the laws of the State of Delaware.",
+            "section": "Governing Law",
+            "clause_type": "governing_law",
+            "page_number": 1,
+        }
+    ]
+    test_retrieval_service.store.upsert_chunks("user_fb_oos", "doc_fb_oos", chunks)
+
+    # Simulate Gemini key configured (is_llm_available=True) but transient API failure (generate_structured=None)
+    monkeypatch.setattr("services.retrieval_service.llm_client.is_llm_available", lambda: True)
+    monkeypatch.setattr("services.retrieval_service.llm_client.generate_structured", lambda **kwargs: None)
+
+    res = test_retrieval_service.retrieve(
+        query="What is the daily cafeteria lunch allowance for remote employees?",
+        user_id="user_fb_oos",
+        document_id="doc_fb_oos",
+        top_k=2,
+        min_score=0.25,
+    )
+    assert res["insufficient_information"] is True
+    assert "not found in the contract" in res["answer"].lower()
+

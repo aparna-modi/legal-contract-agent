@@ -1,3 +1,4 @@
+import logging
 import math
 import re
 from typing import Any, Dict, List, Optional
@@ -8,6 +9,8 @@ from services.clause_service import get_indian_law_reference
 from services.embedding_service import LEGAL_KEYWORDS, embedding_service
 from services.llm_client import llm_client
 from services.vector_store import BaseVectorStore, vector_store
+
+logger = logging.getLogger(__name__)
 
 STOPWORDS = {
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
@@ -152,18 +155,22 @@ def _extract_reference_hints(query: str) -> tuple[Optional[int], List[str], List
 class LegalReranker:
     NEURAL_NOISE_FLOOR = 0.44
     NEURAL_RANGE = 0.44
+    EMBEDDING_2_NOISE_FLOOR = 0.62
+    EMBEDDING_2_RANGE = 0.28
 
     @staticmethod
     def _extract_query_keywords(query: str) -> List[str]:
         return [t for t in re.findall(r"\b[a-z0-9][a-z0-9_-]{1,}\b", query.lower()) if t not in STOPWORDS and len(t) >= 2]
 
     @classmethod
-    def _calibrate_dense(cls, raw_sim: float, is_neural: bool) -> float:
+    def _calibrate_dense(cls, raw_sim: float, is_neural: bool, is_embedding_2: bool = False) -> float:
         if not is_neural:
             return max(0.0, min(1.0, raw_sim))
         if raw_sim <= 0.0:
             return 0.0
-        return max(0.0, min(1.0, (raw_sim - cls.NEURAL_NOISE_FLOOR) / cls.NEURAL_RANGE))
+        floor = cls.EMBEDDING_2_NOISE_FLOOR if is_embedding_2 else cls.NEURAL_NOISE_FLOOR
+        span = cls.EMBEDDING_2_RANGE if is_embedding_2 else cls.NEURAL_RANGE
+        return max(0.0, min(1.0, (raw_sim - floor) / span))
 
     def rerank(
         self,
@@ -176,6 +183,7 @@ class LegalReranker:
             return candidates[:top_k]
         if is_neural is None:
             is_neural = embedding_service.is_neural_provider()
+        is_embedding_2 = bool(is_neural and "embedding-2" in embedding_service.get_provider_name())
 
         q_lower = query.lower()
         q_keywords = self._extract_query_keywords(query)
@@ -201,7 +209,7 @@ class LegalReranker:
             haystack = f"{section} {clause_num} {text_lower}"
             page_num = int(c.get("page_number", 1) or 1)
             raw_dense = float(c.get("similarity_score", 0.0))
-            dense_sim = self._calibrate_dense(raw_dense, is_neural=is_neural)
+            dense_sim = self._calibrate_dense(raw_dense, is_neural=is_neural, is_embedding_2=is_embedding_2)
 
             matched_direct = [kw for kw in q_keywords if kw in haystack]
             direct_ratio = len(matched_direct) / len(q_keywords) if q_keywords else 0.0
@@ -228,7 +236,7 @@ class LegalReranker:
                 and any(f"{q_keywords[i]} {q_keywords[i + 1]}" in text_lower for i in range(len(q_keywords) - 1))
                 else 0.0
             )
-            preamble_bonus = 0.10 if (wants_preamble and page_num == 1) else 0.0
+            preamble_bonus = 0.10 if (wants_preamble and page_num == 1 and (lexical_score > 0.0 or dense_sim > 0.25)) else 0.0
 
             # Explicit page / clause number / schedule match boosts exact lookup queries.
             ref_bonus = 0.0
@@ -371,20 +379,38 @@ class RetrievalService:
         is_neural = embedding_service.last_used_neural
         fetch_limit = max(top_k * 4, 20) if use_reranker else top_k
 
-        raw_candidates = self.store.search(
-            user_id=user_id, query_vector=query_vector, document_id=document_id, top_k=fetch_limit
-        )
-
-        # Self-heal if the vector store lost its index (e.g. ephemeral restart) and fallback chunks were supplied.
-        if not raw_candidates and document_id and fallback_chunks:
-            self.store.upsert_chunks(user_id=user_id, document_id=document_id, chunks=fallback_chunks)
+        raw_candidates: List[Dict[str, Any]] = []
+        try:
             raw_candidates = self.store.search(
                 user_id=user_id, query_vector=query_vector, document_id=document_id, top_k=fetch_limit
             )
+        except Exception as exc:
+            logger.warning("Vector store search failed (%s); attempting fallback recovery.", exc)
+
+        # Self-heal if the vector store lost its index (e.g. ephemeral restart) and fallback chunks were supplied.
+        if not raw_candidates and document_id and fallback_chunks:
+            try:
+                self.store.upsert_chunks(user_id=user_id, document_id=document_id, chunks=fallback_chunks)
+                raw_candidates = self.store.search(
+                    user_id=user_id, query_vector=query_vector, document_id=document_id, top_k=fetch_limit
+                )
+            except Exception as exc:
+                logger.warning("Vector store self-heal failed (%s); scoring fallback_chunks in memory.", exc)
+                raw_candidates = self._score_fallback_chunks_in_memory(
+                    query_vector=query_vector,
+                    user_id=user_id,
+                    document_id=document_id,
+                    fallback_chunks=fallback_chunks,
+                )
 
         all_doc_chunks: List[Dict[str, Any]] = []
         if document_id:
-            all_doc_chunks = self.store.get_document_chunks(user_id=user_id, document_id=document_id, limit=200)
+            try:
+                all_doc_chunks = self.store.get_document_chunks(user_id=user_id, document_id=document_id, limit=200)
+            except Exception as exc:
+                logger.warning("Vector store get_document_chunks failed (%s); using available candidates.", exc)
+            if not all_doc_chunks and fallback_chunks:
+                all_doc_chunks = self._normalize_fallback_chunks(user_id, document_id, fallback_chunks)
             if all_doc_chunks:
                 raw_candidates = self._merge_candidates(raw_candidates, all_doc_chunks)
 
@@ -444,6 +470,23 @@ class RetrievalService:
             document_title=document_title,
         )
 
+        # If LLM synthesis fell back to local-extractive (e.g., transient API error or quota exhaustion),
+        # enforce the hybrid relevance threshold so out-of-scope queries are never falsely answered.
+        if synthesis.get("provider") == "local-extractive" and (max_score < min_score or not verified):
+            return {
+                "query": query,
+                "total_candidates": len(raw_candidates),
+                "results": final_passages[:2],
+                "insufficient_information": True,
+                "message": (
+                    f"Insufficient information in the contract to reliably answer: '{query}'. "
+                    f"(Top relevance score {max_score:.2f} is below the threshold of {min_score:.2f})"
+                ),
+                "answer": f"Not found in the contract: there is insufficient evidence or no specific clause addressing '{query}'.",
+                "indian_law_refs": [],
+                "disclaimer": LEGAL_DISCLAIMER,
+            }
+
         if not synthesis["is_supported"]:
             return {
                 "query": query,
@@ -483,6 +526,55 @@ class RetrievalService:
             "provider": synthesis["provider"],
             "disclaimer": LEGAL_DISCLAIMER,
         }
+
+    @staticmethod
+    def _normalize_fallback_chunks(
+        user_id: str,
+        document_id: str,
+        fallback_chunks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for idx, ch in enumerate(fallback_chunks):
+            text = (ch.get("text") or "").strip()
+            if not text:
+                continue
+            cid = str(ch.get("chunk_id") or f"fb_{idx + 1}")
+            normalized.append({
+                "vector_id": f"{user_id}_{document_id}_{cid}",
+                "chunk_id": cid,
+                "document_id": str(document_id),
+                "user_id": str(user_id),
+                "text": text,
+                "similarity_score": 0.0,
+                "page_number": int(ch.get("page_number") or ch.get("page") or 1),
+                "section": str(ch.get("section_heading") or ch.get("section") or "General"),
+                "clause_number": str(ch.get("clause_number") or ""),
+                "clause_type": str(ch.get("clause_type") or ch.get("chunk_type") or "clause"),
+                "document_version": str(ch.get("document_version") or "1.0"),
+                "token_count": int(ch.get("token_count") or len(text.split())),
+            })
+        return normalized
+
+    @classmethod
+    def _score_fallback_chunks_in_memory(
+        cls,
+        query_vector: List[float],
+        user_id: str,
+        document_id: str,
+        fallback_chunks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        items = cls._normalize_fallback_chunks(user_id, document_id, fallback_chunks)
+        if not items:
+            return []
+        vecs = embedding_service.embed_batch(
+            [f"[{it['clause_type']} | {it['section']}] {it['text']}" for it in items],
+            task_type="RETRIEVAL_DOCUMENT",
+        )
+        for item, vec in zip(items, vecs):
+            sim = embedding_service.cosine_similarity(query_vector, vec)
+            item["similarity_score"] = max(0.0, min(1.0, sim))
+        items.sort(key=lambda x: x["similarity_score"], reverse=True)
+        return items
 
     @staticmethod
     def _select_cited_passages(
@@ -612,8 +704,8 @@ class RetrievalService:
             prompt=prompt,
             schema=GroundedAnswerSchema,
             system_instruction=GROUNDED_QA_SYSTEM_PROMPT,
-            max_output_tokens=2400,
-            timeout=30.0,
+            max_output_tokens=2800,
+            timeout=38.0,
             tier="balanced",
         )
         if structured is not None:

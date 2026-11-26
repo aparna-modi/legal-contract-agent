@@ -7,6 +7,7 @@ const User = require("../models/User");
 const RefreshToken = require("../models/RefreshToken");
 const PasswordResetToken = require("../models/PasswordResetToken");
 const { protect } = require("../middleware/authMiddleware");
+const { aiClient } = require("../utils/aiClient");
 const { recordAudit } = require("../utils/audit");
 const { sendPasswordResetEmail } = require("../utils/mailer");
 const { isValidEmail, validatePasswordStrength, getClientIp, parseDeviceLabel } = require("../utils/security");
@@ -130,6 +131,7 @@ router.post("/login", async (req, res) => {
     await user.save();
 
     const { accessToken } = await issueSession(req, res, user);
+    aiClient.ensureWarmBackground();
     recordAudit(req, { userId: user._id, action: "login", resourceType: "auth", resourceId: user._id, summary: `Signed in from ${parseDeviceLabel(req.headers["user-agent"])}` });
     res.json({ message: "Signed in successfully.", token: accessToken, accessToken, user: user.toSafeProfile() });
   } catch (err) {
@@ -215,6 +217,7 @@ router.post("/logout-all", protect, async (req, res) => {
 
 router.get("/me", protect, async (req, res) => {
   try {
+    aiClient.ensureWarmBackground();
     const activeSessions = await RefreshToken.countDocuments({ user: req.user._id, revokedAt: null, expiresAt: { $gt: new Date() } });
     res.json({
       user: req.user.toSafeProfile(),

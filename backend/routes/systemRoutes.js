@@ -14,6 +14,23 @@ const AuditLogModel = require("../models/AuditLog");
 
 const router = express.Router();
 
+router.post("/warmup", protect, async (req, res) => {
+  try {
+    aiClient.ensureWarmBackground({ minIntervalMs: 30000 });
+    const pool = aiClient.getPoolStatus();
+    res.json({
+      status: "ok",
+      warming: true,
+      aiPool: {
+        totalNodes: pool.totalNodes,
+        healthyNodes: pool.healthyNodes,
+      },
+    });
+  } catch {
+    res.json({ status: "ok", warming: true });
+  }
+});
+
 router.get("/status", protect, async (req, res) => {
   try {
     const aiNodes = await aiClient.probeHealth();

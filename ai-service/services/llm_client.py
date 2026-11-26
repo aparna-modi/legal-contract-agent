@@ -14,13 +14,13 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 FAST_GEMINI_MODELS = (
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
 )
 BALANCED_GEMINI_MODELS = (
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
 )
 STRONG_GEMINI_MODELS = (
@@ -28,7 +28,8 @@ STRONG_GEMINI_MODELS = (
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
 )
-MODEL_TRANSIENT_COOLDOWN_SECONDS = 45.0
+MODEL_TRANSIENT_COOLDOWN_SECONDS = 15.0
+MODEL_QUOTA_COOLDOWN_SECONDS = 45.0
 MODEL_NOT_FOUND_COOLDOWN_SECONDS = 300.0
 
 
@@ -64,7 +65,7 @@ class LLMClient:
 
             self._clients[api_key] = genai.Client(
                 api_key=api_key,
-                http_options=types.HttpOptions(timeout=35_000),
+                http_options=types.HttpOptions(timeout=22_000),
             )
         return self._clients[api_key]
 
@@ -118,15 +119,14 @@ class LLMClient:
         schema: Type[T],
         system_instruction: Optional[str] = None,
         max_output_tokens: int = 1800,
-        timeout: float = 24.0,
+        timeout: float = 28.0,
         tier: str = "balanced",
     ) -> Optional[T]:
         gemini_key = self._get_gemini_key()
         if gemini_key:
-            raw = self._call_gemini(
+            parsed = self._call_gemini_structured(
                 gemini_key, prompt, system_instruction, max_output_tokens, schema, timeout, tier
             )
-            parsed = self._parse_schema(raw, schema) if raw else None
             if parsed is not None:
                 return parsed
 
@@ -175,11 +175,98 @@ class LLMClient:
                         return None
                     if any(k in msg for k in ("not found", "404")):
                         self._model_cooldowns[model] = time.monotonic() + MODEL_NOT_FOUND_COOLDOWN_SECONDS
-                    elif any(k in msg for k in ("503", "429", "quota", "timeout", "timed out")):
+                    elif any(k in msg for k in ("503", "504", "429", "quota", "timeout", "timed out", "deadline_exceeded", "unavailable")):
                         self._model_cooldowns[model] = time.monotonic() + MODEL_TRANSIENT_COOLDOWN_SECONDS
         except Exception as exc:
             logger.warning("Gemini OCR aborted: %s", type(exc).__name__)
             return None
+        return None
+
+    def _call_gemini_structured(
+        self,
+        api_key: str,
+        prompt: str,
+        system_instruction: Optional[str],
+        max_output_tokens: int,
+        schema: Type[T],
+        timeout: float,
+        tier: str = "balanced",
+    ) -> Optional[T]:
+        try:
+            from google.genai import types
+
+            client = self._get_genai_client(api_key)
+        except Exception:
+            return None
+
+        deadline = time.monotonic() + timeout
+        candidates = self._model_candidates(tier)
+        for idx, model in enumerate(candidates):
+            now = time.monotonic()
+            if self._model_cooldowns.get(model, 0.0) > now:
+                continue
+            if deadline - now < 1.5:
+                break
+
+            has_fallback_model = any(
+                self._model_cooldowns.get(m, 0.0) <= now for m in candidates[idx + 1 :]
+            )
+            cfg_kwargs: dict = {
+                "temperature": 0.15,
+                "max_output_tokens": max_output_tokens,
+                "response_mime_type": "application/json",
+                "response_schema": schema,
+            }
+            if system_instruction:
+                cfg_kwargs["system_instruction"] = system_instruction
+
+            for attempt in range(2):
+                try:
+                    resp = client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(**cfg_kwargs),
+                    )
+                    output = getattr(resp, "text", None)
+                    if output and output.strip():
+                        parsed = self._parse_schema(output.strip(), schema)
+                        if parsed is not None:
+                            self._last_used_model = model
+                            return parsed
+                        logger.warning(
+                            "Gemini structured parse failed model=%s attempt=%d chars=%d",
+                            model, attempt + 1, len(output),
+                        )
+                    break
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    logger.warning(
+                        "Gemini structured call failed model=%s attempt=%d: %s (%s)",
+                        model, attempt + 1, type(exc).__name__, str(exc)[:140],
+                    )
+                    if any(k in msg for k in ("api key", "401", "403", "permission")):
+                        self._disabled_gemini_keys.add(api_key)
+                        return None
+                    is_quota = any(k in msg for k in ("429", "quota", "resource_exhausted"))
+                    is_transient = any(
+                        k in msg for k in ("503", "504", "timeout", "timed out", "deadline_exceeded", "unavailable")
+                    )
+                    if (
+                        is_transient
+                        and not is_quota
+                        and not has_fallback_model
+                        and attempt == 0
+                        and (deadline - time.monotonic()) > 4.0
+                    ):
+                        time.sleep(0.7)
+                        continue
+                    if any(k in msg for k in ("not found", "404")):
+                        self._model_cooldowns[model] = time.monotonic() + MODEL_NOT_FOUND_COOLDOWN_SECONDS
+                    elif is_quota:
+                        self._model_cooldowns[model] = time.monotonic() + MODEL_QUOTA_COOLDOWN_SECONDS
+                    elif is_transient:
+                        self._model_cooldowns[model] = time.monotonic() + MODEL_TRANSIENT_COOLDOWN_SECONDS
+                    break
         return None
 
     def _call_gemini(
@@ -200,13 +287,17 @@ class LLMClient:
             return None
 
         deadline = time.monotonic() + timeout
-        for model in self._model_candidates(tier):
+        candidates = self._model_candidates(tier)
+        for idx, model in enumerate(candidates):
             now = time.monotonic()
             if self._model_cooldowns.get(model, 0.0) > now:
                 continue
             if deadline - now < 1.5:
                 break
 
+            has_fallback_model = any(
+                self._model_cooldowns.get(m, 0.0) <= now for m in candidates[idx + 1 :]
+            )
             cfg_kwargs: dict = {
                 "temperature": 0.15,
                 "max_output_tokens": max_output_tokens,
@@ -231,18 +322,31 @@ class LLMClient:
                     break
                 except Exception as exc:
                     msg = str(exc).lower()
-                    logger.warning("Gemini call failed model=%s attempt=%d: %s", model, attempt + 1, type(exc).__name__)
+                    logger.warning(
+                        "Gemini call failed model=%s attempt=%d: %s (%s)",
+                        model, attempt + 1, type(exc).__name__, str(exc)[:140],
+                    )
                     if any(k in msg for k in ("api key", "401", "403", "permission")):
                         self._disabled_gemini_keys.add(api_key)
                         return None
                     is_quota = any(k in msg for k in ("429", "quota", "resource_exhausted"))
-                    is_transient = any(k in msg for k in ("503", "timeout", "timed out", "unavailable"))
-                    if is_transient and not is_quota and attempt == 0 and (deadline - time.monotonic()) > 4.0:
+                    is_transient = any(
+                        k in msg for k in ("503", "504", "timeout", "timed out", "deadline_exceeded", "unavailable")
+                    )
+                    if (
+                        is_transient
+                        and not is_quota
+                        and not has_fallback_model
+                        and attempt == 0
+                        and (deadline - time.monotonic()) > 4.0
+                    ):
                         time.sleep(0.7)
                         continue
-                    if any(k in msg for k in ("not found", "404", "400", "invalid_argument")):
+                    if any(k in msg for k in ("not found", "404")):
                         self._model_cooldowns[model] = time.monotonic() + MODEL_NOT_FOUND_COOLDOWN_SECONDS
-                    elif is_quota or is_transient:
+                    elif is_quota:
+                        self._model_cooldowns[model] = time.monotonic() + MODEL_QUOTA_COOLDOWN_SECONDS
+                    elif is_transient:
                         self._model_cooldowns[model] = time.monotonic() + MODEL_TRANSIENT_COOLDOWN_SECONDS
                     break
         return None

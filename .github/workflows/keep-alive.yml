@@ -1,0 +1,52 @@
+name: Keep-Alive — Render Services
+
+on:
+  schedule:
+    # Ping every 10 minutes (shorter than Render's 15-minute idle spin-down window)
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: render-keep-alive
+  cancel-in-progress: true
+
+jobs:
+  ping-services:
+    name: Keep Frontend, Backend & AI Service Warm
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FRONTEND_URL: ${{ vars.FRONTEND_URL || 'https://legal-contract-agent.onrender.com' }}
+      BACKEND_URL: ${{ vars.BACKEND_URL || 'https://legal-contract-backend-4kr9.onrender.com' }}
+      AI_SERVICE_URL: ${{ vars.AI_SERVICE_URL || 'https://legal-contract-ai-service.onrender.com' }}
+    steps:
+      - name: Ping AI Service, Backend, and Frontend
+        shell: bash
+        run: |
+          set -u
+          ping_url() {
+            local label="$1"
+            local url="$2"
+            local code
+            code=$(curl -sS -o /tmp/ping_body.txt -w "%{http_code}" --retry 3 --retry-delay 5 --retry-all-errors --max-time 75 "$url" || echo "000")
+            echo "[$label] $url -> HTTP $code"
+            if [ "$code" != "200" ]; then
+              head -c 200 /tmp/ping_body.txt || true
+              echo ""
+              return 1
+            fi
+          }
+
+          # Wake AI service and backend in parallel, then verify all three
+          ping_url "AI Service" "${AI_SERVICE_URL}/health/ready" &
+          pid_ai=$!
+          ping_url "Backend" "${BACKEND_URL}/health/ready" &
+          pid_be=$!
+          ping_url "Frontend" "${FRONTEND_URL}/" &
+          pid_fe=$!
+
+          rc=0
+          wait "$pid_ai" || rc=1
+          wait "$pid_be" || rc=1
+          wait "$pid_fe" || rc=1
+          exit "$rc"

@@ -278,8 +278,8 @@ class ContractAnalysisService:
             prompt=prompt,
             schema=ContractSummarySchema,
             system_instruction=ANALYSIS_PROMPT,
-            max_output_tokens=5600,
-            timeout=34.0,
+            max_output_tokens=6800,
+            timeout=45.0,
             tier="balanced",
         )
 
@@ -455,8 +455,8 @@ class ContractAnalysisService:
             prompt=prompt,
             schema=MissingClauseDraftSchema,
             system_instruction=MISSING_CLAUSE_PROMPT,
-            max_output_tokens=1100,
-            timeout=18.0,
+            max_output_tokens=1600,
+            timeout=28.0,
             tier="balanced",
         )
         if res and res.suggested_clause_text.strip():
@@ -659,8 +659,8 @@ class ContractAnalysisService:
                 prompt=prompt,
                 schema=ComparisonSummarySchema,
                 system_instruction=COMPARISON_PROMPT,
-                max_output_tokens=1300,
-                timeout=24.0,
+                max_output_tokens=2000,
+                timeout=32.0,
                 tier="balanced",
             )
             if res:

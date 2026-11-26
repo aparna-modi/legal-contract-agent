@@ -194,6 +194,11 @@ class LiveAITester:
         self.other_token = r2.json().get("token", "")
         assert self.token and self.other_token, "Failed to register disposable test users"
 
+        t0 = time.perf_counter()
+        wu = self.client.post("/api/system/warmup", headers=self._auth_headers())
+        wu_ms = round((time.perf_counter() - t0) * 1000)
+        self.record("AI Keep-Alive Warmup", "POST /api/system/warmup", "Proactive AI worker warmup endpoint", "HTTP 200 status=ok", f"HTTP {wu.status_code} ({wu.json().get('status') if wu.status_code == 200 else wu.text[:40]})", wu.status_code == 200 and wu.json().get("status") == "ok", wu_ms, "High")
+
     def _test_risky_agreement_end_to_end(self) -> Optional[str]:
         up, up_ms = self._upload(FIXTURES_DIR / "risky_service_agreement.txt", "Risky Service Agreement")
         if up.status_code != 201:
@@ -453,6 +458,25 @@ class LiveAITester:
         counts = body.get("counts", {})
         ok = cmp.status_code == 200 and counts.get("modified", 0) >= 1 and counts.get("added", 0) >= 1 and "not legal advice" in str(body.get("disclaimer", "")).lower()
         self.record("Contract Comparison", "POST /api/contracts/compare", "Compare V1 vs V2", "HTTP 200, detects modified & added + disclaimer", f"HTTP {cmp.status_code}, counts={counts}", ok, ms, "High")
+
+        # Ad-hoc counter-redline used on Compare screen
+        first_mod = (body.get("modified") or [None])[0]
+        if first_mod:
+            t0 = time.perf_counter()
+            adhoc = self.client.post(
+                "/api/contracts/clauses/redline-adhoc",
+                headers=self._auth_headers(),
+                json={
+                    "clauseType": first_mod.get("clause_type", "Commercial Clause"),
+                    "clauseText": first_mod.get("text_b", ""),
+                    "riskLevel": first_mod.get("risk_b", "medium"),
+                    "stance": "balanced",
+                },
+            )
+            adhoc_ms = round((time.perf_counter() - t0) * 1000)
+            adhoc_json = adhoc.json() if adhoc.status_code == 200 else {}
+            ok_adhoc = adhoc.status_code == 200 and len(adhoc_json.get("suggested_text", "")) >= 40
+            self.record("Compare Counter-Redline", "POST /api/contracts/clauses/redline-adhoc", "Draft counter-redline for modified clause", "HTTP 200 + suggested_text", f"HTTP {adhoc.status_code}, chars={len(adhoc_json.get('suggested_text', ''))}", ok_adhoc, adhoc_ms, "High")
 
     def _test_contract_drafting_studio(self) -> None:
         t0 = time.perf_counter()

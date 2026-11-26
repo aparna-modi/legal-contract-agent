@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
@@ -308,6 +309,38 @@ class QdrantVectorStore(BaseVectorStore):
                     json={"field_name": field, "field_schema": "keyword"},
                 )
 
+    def _request_with_retry(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Optional[Dict[str, Any]] = None,
+        timeout: float = 15.0,
+    ) -> httpx.Response:
+        url = f"{self.base_url}{path}"
+        last_exc: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.request(method, url, headers=self.headers, json=json)
+                if resp.status_code == 404 and attempt == 0 and f"/collections/{self.collection_name}" in path:
+                    self._ensure_collection()
+                    continue
+                if resp.status_code in (429, 502, 503, 504) and attempt == 0:
+                    time.sleep(0.6)
+                    continue
+                resp.raise_for_status()
+                return resp
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if attempt == 0:
+                    time.sleep(0.6)
+                    continue
+                raise
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("Qdrant request failed without response")
+
     def upsert_chunks(self, user_id: str, document_id: str, chunks: List[Dict[str, Any]]) -> int:
         if not user_id or not document_id or not chunks:
             return 0
@@ -325,12 +358,12 @@ class QdrantVectorStore(BaseVectorStore):
                 "payload": payload,
             })
 
-        with httpx.Client(timeout=20.0) as client:
-            client.put(
-                f"{self.base_url}/collections/{self.collection_name}/points?wait=true",
-                headers=self.headers,
-                json={"points": points},
-            ).raise_for_status()
+        self._request_with_retry(
+            "PUT",
+            f"/collections/{self.collection_name}/points?wait=true",
+            json={"points": points},
+            timeout=25.0,
+        )
         return len(points)
 
     def search(
@@ -346,14 +379,13 @@ class QdrantVectorStore(BaseVectorStore):
         if document_id:
             must.append({"key": "document_id", "match": {"value": str(document_id)}})
 
-        with httpx.Client(timeout=15.0) as client:
-            resp = client.post(
-                f"{self.base_url}/collections/{self.collection_name}/points/search",
-                headers=self.headers,
-                json={"vector": query_vector, "limit": top_k, "with_payload": True, "filter": {"must": must}},
-            )
-            resp.raise_for_status()
-            hits = resp.json().get("result", [])
+        resp = self._request_with_retry(
+            "POST",
+            f"/collections/{self.collection_name}/points/search",
+            json={"vector": query_vector, "limit": top_k, "with_payload": True, "filter": {"must": must}},
+            timeout=15.0,
+        )
+        hits = resp.json().get("result", [])
 
         return [
             _hit_dict(
@@ -377,14 +409,13 @@ class QdrantVectorStore(BaseVectorStore):
             {"key": "user_id", "match": {"value": str(user_id)}},
             {"key": "document_id", "match": {"value": str(document_id)}},
         ]
-        with httpx.Client(timeout=15.0) as client:
-            resp = client.post(
-                f"{self.base_url}/collections/{self.collection_name}/points/scroll",
-                headers=self.headers,
-                json={"filter": {"must": must}, "limit": limit, "with_payload": True, "with_vector": False},
-            )
-            resp.raise_for_status()
-            points = resp.json().get("result", {}).get("points", [])
+        resp = self._request_with_retry(
+            "POST",
+            f"/collections/{self.collection_name}/points/scroll",
+            json={"filter": {"must": must}, "limit": limit, "with_payload": True, "with_vector": False},
+            timeout=15.0,
+        )
+        points = resp.json().get("result", {}).get("points", [])
 
         items = [
             _hit_dict(
@@ -400,25 +431,24 @@ class QdrantVectorStore(BaseVectorStore):
 
     def _count_filter(self, must: Optional[List[Dict[str, Any]]] = None) -> int:
         body: Dict[str, Any] = {"exact": True, **({"filter": {"must": must}} if must else {})}
-        with httpx.Client(timeout=10.0) as client:
-            resp = client.post(
-                f"{self.base_url}/collections/{self.collection_name}/points/count",
-                headers=self.headers,
-                json=body,
-            )
-            resp.raise_for_status()
-            return int(resp.json().get("result", {}).get("count", 0))
+        resp = self._request_with_retry(
+            "POST",
+            f"/collections/{self.collection_name}/points/count",
+            json=body,
+            timeout=10.0,
+        )
+        return int(resp.json().get("result", {}).get("count", 0))
 
     def _delete_filter(self, must: List[Dict[str, Any]]) -> int:
         before = self._count_filter(must)
         if before == 0:
             return 0
-        with httpx.Client(timeout=15.0) as client:
-            client.post(
-                f"{self.base_url}/collections/{self.collection_name}/points/delete?wait=true",
-                headers=self.headers,
-                json={"filter": {"must": must}},
-            ).raise_for_status()
+        self._request_with_retry(
+            "POST",
+            f"/collections/{self.collection_name}/points/delete?wait=true",
+            json={"filter": {"must": must}},
+            timeout=15.0,
+        )
         return before
 
     def delete_by_document(self, user_id: str, document_id: str) -> int:

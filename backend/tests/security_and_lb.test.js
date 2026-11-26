@@ -21,7 +21,7 @@ const {
   hashToken,
   parseCookies,
 } = require("../utils/tokens");
-const { aiClient } = require("../utils/aiClient");
+const { aiClient, extractAiErrorMessage } = require("../utils/aiClient");
 const { storageService } = require("../utils/storage");
 const { extractionQueue } = require("../utils/jobQueue");
 const { renderPrometheusMetrics } = require("../utils/metrics");
@@ -311,6 +311,79 @@ test("AiServicePool.probeHealth resets an OPEN circuit to CLOSED once /health/re
   } finally {
     if (prevUrls === undefined) delete process.env.AI_SERVICE_URLS;
     else process.env.AI_SERVICE_URLS = prevUrls;
+    srv.close();
+  }
+});
+
+test("AiServicePool seamlessly waits for a cold-starting AI worker and succeeds on first caller request", async () => {
+  let ready = false;
+  let draftHits = 0;
+
+  const srv = http.createServer((req, res) => {
+    if (req.url === "/health/ready") {
+      if (!ready) {
+        res.writeHead(503, { "Content-Type": "text/html" });
+        res.end("<html>Service Waking Up</html>");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ready", llm_provider: "gemini", embedding_provider: "gemini" }));
+      return;
+    }
+    if (req.url === "/api/v1/draft") {
+      draftHits += 1;
+      if (!ready) {
+        res.writeHead(502, { "Content-Type": "text/html" });
+        res.end("<html>Bad Gateway</html>");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ title: "Woken Draft MSA", full_text: "1. SCOPE\nBalanced agreement." }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  const wakeTimer = setTimeout(() => {
+    ready = true;
+  }, 220);
+
+  const prev = {
+    AI_SERVICE_URLS: process.env.AI_SERVICE_URLS,
+    AI_WAKEUP_TIMEOUT_MS: process.env.AI_WAKEUP_TIMEOUT_MS,
+    AI_WAKEUP_POLL_MS: process.env.AI_WAKEUP_POLL_MS,
+  };
+  process.env.AI_SERVICE_URLS = `http://127.0.0.1:${srv.address().port}`;
+  process.env.AI_WAKEUP_TIMEOUT_MS = "3000";
+  process.env.AI_WAKEUP_POLL_MS = "60";
+
+  try {
+    const res = await aiClient.request("/api/v1/draft", {
+      method: "POST",
+      body: { contract_type: "msa" },
+      timeoutMs: 3000,
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.title, "Woken Draft MSA");
+    assert.equal(draftHits, 2);
+    assert.equal(aiClient.getPoolStatus().nodes[0].circuitState, "CLOSED");
+
+    // Verify gateway HTML errors map to clean user-facing message
+    const fakeGatewayRes = new Response("<html>502 Bad Gateway</html>", {
+      status: 502,
+      headers: { "content-type": "text/html" },
+    });
+    const msg = await extractAiErrorMessage(fakeGatewayRes, "AI drafting request failed.");
+    assert.match(msg, /waking up|temporarily busy/i);
+  } finally {
+    clearTimeout(wakeTimer);
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
     srv.close();
   }
 });

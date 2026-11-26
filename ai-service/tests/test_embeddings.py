@@ -206,3 +206,31 @@ class TestEmbeddingEndpoints:
         assert len(fallback_res) == 384
         assert any(x != 0.0 for x in fallback_res)
         assert "local-legal-vectorizer" in service.get_provider_name()
+
+    def test_gemini_embedding_fails_over_to_embedding_2_on_429(self, monkeypatch):
+        raw_vec = [0.5] * 384
+        seen_models = []
+
+        class FailoverModels:
+            def embed_content(self, model, contents, config):
+                seen_models.append(model)
+                if model == "gemini-embedding-001":
+                    raise RuntimeError("429 RESOURCE_EXHAUSTED quota exceeded")
+                return SimpleNamespace(
+                    embeddings=[SimpleNamespace(values=raw_vec) for _ in contents]
+                )
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key-failover")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        service = EmbeddingService(dimension=384)
+        monkeypatch.setattr(
+            service,
+            "_get_genai_client",
+            lambda _key: SimpleNamespace(models=FailoverModels()),
+        )
+
+        res = service.embed_text("Mutual confidentiality clause")
+        assert len(res) == 384
+        assert seen_models == ["gemini-embedding-001", "gemini-embedding-2"]
+        assert service.last_used_neural is True
+        assert "gemini-embedding-2" in service.get_provider_name()

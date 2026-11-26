@@ -249,8 +249,8 @@ class PlaybookService:
             prompt=prompt,
             schema=RedlineSuggestionSchema,
             system_instruction=REDLINE_PROMPT,
-            max_output_tokens=1100,
-            timeout=16.0,
+            max_output_tokens=1600,
+            timeout=28.0,
             tier="balanced" if custom_instruction.strip() else "fast",
         )
         if res and res.suggested_text.strip():
@@ -403,8 +403,8 @@ class PlaybookService:
                 prompt=prompt,
                 schema=PlaybookAuditSchema,
                 system_instruction=PLAYBOOK_AUDIT_PROMPT,
-                max_output_tokens=1400,
-                timeout=18.0,
+                max_output_tokens=2200,
+                timeout=30.0,
                 tier="fast",
             )
             if audit:
@@ -452,8 +452,8 @@ class PlaybookService:
             prompt=prompt,
             schema=GeneratedRulesSchema,
             system_instruction=POLICY_RULE_GEN_PROMPT,
-            max_output_tokens=1400,
-            timeout=18.0,
+            max_output_tokens=1800,
+            timeout=28.0,
             tier="balanced",
         )
 

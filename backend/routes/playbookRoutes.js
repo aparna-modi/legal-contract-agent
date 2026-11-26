@@ -6,7 +6,7 @@ const DocumentModel = require("../models/Document");
 const ClauseModel = require("../models/Clause");
 const { protect } = require("../middleware/authMiddleware");
 const { aiLimiter } = require("../middleware/rateLimiters");
-const { aiClient } = require("../utils/aiClient");
+const { aiClient, extractAiErrorMessage } = require("../utils/aiClient");
 const { recordAudit } = require("../utils/audit");
 
 const router = express.Router();
@@ -114,6 +114,7 @@ router.post("/presets/:presetId", protect, async (req, res) => {
 
 router.get("/", protect, async (req, res) => {
   try {
+    aiClient.ensureWarmBackground();
     res.json({ playbook: await getOrCreatePlaybook(req.user) });
   } catch (err) {
     console.error("Get playbook error:", err.message);
@@ -159,15 +160,15 @@ router.post("/generate-rules", protect, aiLimiter, async (req, res) => {
     const aiRes = await aiClient.request("/api/v1/playbook/generate-rules", {
       method: "POST",
       requestId: req.requestId,
-      timeoutMs: 35000,
+      timeoutMs: 90000,
       body: {
         policy_text: cleaned.slice(0, 3000),
         jurisdiction: String(jurisdiction || "").slice(0, 160),
       },
     });
     if (!aiRes.ok) {
-      const err = await aiRes.json().catch(() => ({}));
-      return res.status(aiRes.status).json({ message: err.detail || "Failed to generate playbook rules." });
+      const message = await extractAiErrorMessage(aiRes, "Failed to generate playbook rules.");
+      return res.status(aiRes.status).json({ message });
     }
     const generated = await aiRes.json();
     recordAudit(req, {
@@ -178,7 +179,7 @@ router.post("/generate-rules", protect, aiLimiter, async (req, res) => {
     res.json(generated);
   } catch (err) {
     console.error("Generate playbook rules error:", err.message);
-    res.status(err?.status || 500).json({ message: "Failed to generate playbook rules." });
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to generate playbook rules." });
   }
 });
 
@@ -211,7 +212,7 @@ router.post("/evaluate/:contractId", protect, aiLimiter, async (req, res) => {
     const aiRes = await aiClient.request("/api/v1/playbook/evaluate", {
       method: "POST",
       requestId: req.requestId,
-      timeoutMs: 45000,
+      timeoutMs: 90000,
       body: {
         clauses: clauses.map((c) => ({ clause_type: c.clauseType, text: c.text, risk_level: c.riskLevel })),
         missing_clauses: contract.missingClauses || [],
@@ -221,8 +222,8 @@ router.post("/evaluate/:contractId", protect, aiLimiter, async (req, res) => {
       },
     });
     if (!aiRes.ok) {
-      const err = await aiRes.json().catch(() => ({}));
-      return res.status(aiRes.status).json({ message: err.detail || "Playbook evaluation failed." });
+      const message = await extractAiErrorMessage(aiRes, "Playbook evaluation failed.");
+      return res.status(aiRes.status).json({ message });
     }
 
     const evaluation = await aiRes.json();
@@ -230,7 +231,7 @@ router.post("/evaluate/:contractId", protect, aiLimiter, async (req, res) => {
     res.json({ playbookName: evalName, contractId: contract._id, contractTitle: contract.title, ...evaluation });
   } catch (err) {
     console.error("Evaluate playbook error:", err.message);
-    res.status(err?.status || 500).json({ message: "Failed to evaluate contract against playbook." });
+    res.status(err?.status || 500).json({ message: err?.status === 503 ? err.message : "Failed to evaluate contract against playbook." });
   }
 });
 

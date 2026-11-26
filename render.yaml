@@ -52,6 +52,14 @@ services:
         value: gridfs
       - key: AI_TIMEOUT_MS
         value: "90000"
+      - key: AI_WAKEUP_TIMEOUT_MS
+        value: "75000"
+      - key: ENABLE_KEEP_ALIVE
+        value: "true"
+      - key: KEEP_ALIVE_INTERVAL_MS
+        value: "540000"
+      - key: FRONTEND_URL
+        value: https://legal-contract-agent.onrender.com
       - key: S3_BUCKET
         sync: false
       - key: S3_REGION

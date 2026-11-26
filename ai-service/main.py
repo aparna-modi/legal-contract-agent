@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 import uuid
@@ -6,10 +7,11 @@ from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 from extractors import ExtractionResult
 from services.analysis_service import analysis_service
@@ -184,6 +186,17 @@ class ReviseDraftRequest(BaseModel):
 AUTH = [Depends(require_internal_auth)]
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "AI service encountered an unexpected error processing this request. Please retry.",
+        },
+    )
+
+
 @app.get("/", tags=["General"])
 async def root():
     return {
@@ -212,6 +225,11 @@ async def health():
 @app.get("/health/live", tags=["Health"])
 async def health_live():
     return {"status": "alive", "service": "ai-service"}
+
+
+@app.get("/health/ping", tags=["Health"])
+async def health_ping():
+    return {"status": "ok", "service": "ai-service"}
 
 
 @app.get("/health/ready", tags=["Health"])

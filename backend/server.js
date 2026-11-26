@@ -195,6 +195,7 @@ async function gracefulShutdown(signal) {
   if (httpServer) {
     await new Promise((resolve) => httpServer.close(resolve));
   }
+  aiClient.stopKeepAlive();
   await closeRedis().catch(() => {});
   try {
     await mongoose.connection.close(false);
@@ -219,9 +220,11 @@ const startServer = async () => {
     await connectDB();
     httpServer = app.listen(PORT, () => {
       console.log(`API server listening on http://localhost:${PORT}`);
+      aiClient.startKeepAlive();
     });
     httpServer.keepAliveTimeout = 65000;
     httpServer.headersTimeout = 66000;
+    httpServer.requestTimeout = 150000;
   } catch (error) {
     console.error("Failed to start server:", error.message);
     process.exit(1);

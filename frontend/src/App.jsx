@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useState } from "react";
 import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { useAuth } from "./context/AuthContext";
+import { systemApi } from "./api/client";
 import ErrorBoundary from "./components/ErrorBoundary";
 import LibrarySearchModal from "./components/LibrarySearchModal";
 import ThemeToggle from "./components/ThemeToggle";
@@ -66,6 +67,18 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isAuthenticated]);
+
+  // Proactively warm up the backend and AI service when signed in and keep them active while the tab is open.
+  useEffect(() => {
+    if (!isAuthenticated || !token) return undefined;
+    const ping = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      systemApi.warmup(token).catch(() => {});
+    };
+    ping();
+    const timer = window.setInterval(ping, 8 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [isAuthenticated, token]);
 
   const initials = (user?.name || "U")
     .split(" ")
