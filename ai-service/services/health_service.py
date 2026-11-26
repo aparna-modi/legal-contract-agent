@@ -1,4 +1,5 @@
 import datetime
+import importlib
 import os
 import sys
 from typing import Any, Dict
@@ -20,7 +21,7 @@ def get_gpu_status() -> Dict[str, Any]:
     }
 
     try:
-        import torch
+        torch = importlib.import_module("torch")
 
         if torch.cuda.is_available():
             gpu_info["available"] = True
