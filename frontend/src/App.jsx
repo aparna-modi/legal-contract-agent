@@ -4,6 +4,7 @@ import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { useAuth } from "./context/AuthContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import LibrarySearchModal from "./components/LibrarySearchModal";
+import ThemeToggle from "./components/ThemeToggle";
 import { BrandMark, LogOutIcon, MenuIcon, SearchIcon, XIcon } from "./components/Icons";
 import { EASE_EDITORIAL, SPRING_SNAPPY } from "./components/motionTokens";
 import Dashboard from "./pages/Dashboard";
@@ -136,6 +137,8 @@ export default function App() {
                       <kbd>Ctrl K</kbd>
                     </button>
 
+                    <ThemeToggle />
+
                     <NavLink
                       to="/security"
                       className={({ isActive }) => `account-pill ${isActive ? "active" : ""}`}
@@ -162,6 +165,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="auth-nav">
+                    <ThemeToggle />
                     <NavLink to="/login" className="btn btn-ghost btn-sm">Sign in</NavLink>
                     <NavLink to="/register" className="btn btn-primary btn-sm">Get started</NavLink>
                   </div>
@@ -202,6 +206,7 @@ export default function App() {
                       >
                         <SearchIcon size={14} /> Search Library
                       </button>
+                      <ThemeToggle showLabel />
                       <button type="button" className="btn btn-ghost btn-sm" onClick={handleLogout}>
                         <LogOutIcon size={14} /> Sign out
                       </button>

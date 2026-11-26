@@ -13,10 +13,10 @@ const svgProps = (size = 16, className = "") => ({
 
 export const BrandMark = ({ size = 26 }) => (
   <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden="true">
-    <rect width="32" height="32" rx="8" fill="#182230" />
-    <path d="M9.5 8.5h8.5l4.5 4.5v10.5a1 1 0 0 1-1 1h-12a1 1 0 0 1-1-1v-14a1 1 0 0 1 1-1Z" stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" />
-    <path d="M18 8.5V13h4.5" stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" />
-    <path d="M12.5 16.5h7M12.5 20h4.5" stroke="#5eead4" strokeWidth="1.6" strokeLinecap="round" />
+    <rect x="0.5" y="0.5" width="31" height="31" rx="7.5" fill="var(--brand-mark-bg)" stroke="var(--brand-mark-stroke)" />
+    <path d="M9.5 8.5h8.5l4.5 4.5v10.5a1 1 0 0 1-1 1h-12a1 1 0 0 1-1-1v-14a1 1 0 0 1 1-1Z" stroke="var(--brand-mark-ink)" strokeWidth="1.6" strokeLinejoin="round" />
+    <path d="M18 8.5V13h4.5" stroke="var(--brand-mark-ink)" strokeWidth="1.6" strokeLinejoin="round" />
+    <path d="M12.5 16.5h7M12.5 20h4.5" stroke="var(--brand-mark-accent)" strokeWidth="1.6" strokeLinecap="round" />
   </svg>
 );
 
@@ -296,5 +296,25 @@ export const BookOpenIcon = ({ size = 16, className }) => (
   <svg {...svgProps(size, className)}>
     <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
     <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+  </svg>
+);
+
+export const SunIcon = ({ size = 15, className }) => (
+  <svg {...svgProps(size, className)}>
+    <circle cx="12" cy="12" r="4" />
+    <line x1="12" y1="2" x2="12" y2="4.5" />
+    <line x1="12" y1="19.5" x2="12" y2="22" />
+    <line x1="4.93" y1="4.93" x2="6.7" y2="6.7" />
+    <line x1="17.3" y1="17.3" x2="19.07" y2="19.07" />
+    <line x1="2" y1="12" x2="4.5" y2="12" />
+    <line x1="19.5" y1="12" x2="22" y2="12" />
+    <line x1="4.93" y1="19.07" x2="6.7" y2="17.3" />
+    <line x1="17.3" y1="6.7" x2="19.07" y2="4.93" />
+  </svg>
+);
+
+export const MoonIcon = ({ size = 15, className }) => (
+  <svg {...svgProps(size, className)}>
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
   </svg>
 );

@@ -1,5 +1,10 @@
-/* Design tokens anchored to the reference video palette: warm alabaster paper, crisp cotton surfaces, obsidian ink, and surgical legal accents. */
+/* Design tokens:
+   - Primary identity (light): Editorial Warm Parchment Light anchored to the reference video palette.
+   - Optional toggle (dark): Editorial Warm Charcoal / Graphite Dark — zero neon, zero purple/cyan glassmorphism. */
+
 :root {
+  color-scheme: light;
+
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-serif: "Newsreader", Georgia, "Times New Roman", serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -11,12 +16,17 @@
   --bg-hover: #faf9f5;
   --bg-input: #ffffff;
   --bg-inset: #f9f8f4;
+  --nav-bg: rgba(255, 255, 255, 0.9);
+  --backdrop-bg: rgba(20, 24, 31, 0.44);
+  --skeleton-shine: #e9e6dd;
 
   /* Hairline structural borders */
   --border: #e4e1d8;
   --border-subtle: #ece9e1;
   --border-strong: #d1cdc1;
+  --border-hover: #b8b3a6;
   --border-focus: #182230;
+  --focus-ring: rgba(24, 34, 48, 0.09);
 
   /* Typography ink (WCAG 2.2 AA/AAA contrast on both #ffffff and #f7f6f2) */
   --ink-primary: #14181f;
@@ -26,17 +36,34 @@
   /* Commanding obsidian ink brand + restrained archival teal utility accent */
   --brand: #182230;
   --brand-hover: #0e1621;
+  --brand-ink: #ffffff;
+  --brand-badge-bg: rgba(255, 255, 255, 0.18);
   --brand-soft: rgba(24, 34, 48, 0.055);
   --brand-border: rgba(24, 34, 48, 0.16);
+  --brand-mark-bg: #182230;
+  --brand-mark-stroke: #182230;
+  --brand-mark-ink: #ffffff;
+  --brand-mark-accent: #5eead4;
 
   --accent: #0f6e65;
   --accent-hover: #0b5850;
+  --accent-ink: #ffffff;
   --accent-bg: #f1f7f6;
   --accent-border: #c9e0dd;
+
+  /* Auth split hero panel (architectural obsidian in light mode) */
+  --hero-aside-bg: #182230;
+  --hero-aside-border: transparent;
+  --hero-aside-ink: #ffffff;
+  --hero-aside-copy: #cbd5e1;
+  --hero-aside-item: #e2e8f0;
+  --hero-aside-rule: rgba(255, 255, 255, 0.14);
+  --hero-aside-check: #5eead4;
 
   /* Semantic risk & compliance palette */
   --risk-high: #b42318;
   --risk-high-solid: #d92d20;
+  --risk-high-hover: #912018;
   --risk-high-bg: #fef3f2;
   --risk-high-border: #fecdca;
 
@@ -49,6 +76,13 @@
   --risk-low-solid: #079455;
   --risk-low-bg: #ecfdf3;
   --risk-low-border: #abefc6;
+  --health-ok-ring: rgba(7, 148, 85, 0.18);
+
+  /* Inline redline word diff */
+  --diff-del-bg: #fee4e2;
+  --diff-del-ink: #912018;
+  --diff-add-bg: #d1fadf;
+  --diff-add-ink: #05603a;
 
   /* Spacing rhythm */
   --space-1: 4px;
@@ -83,4 +117,115 @@
   --shadow-lg:
     0 12px 28px -6px rgba(20, 24, 31, 0.14),
     0 34px 68px -18px rgba(20, 24, 31, 0.22);
+}
+
+/* Optional Editorial Warm Charcoal / Graphite Dark Theme */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Warm ink-charcoal & graphite surfaces */
+  --bg-canvas: #111110;
+  --bg-surface: #191918;
+  --bg-subtle: #22211f;
+  --bg-hover: #252421;
+  --bg-input: #141413;
+  --bg-inset: #1e1d1b;
+  --nav-bg: rgba(17, 17, 16, 0.88);
+  --backdrop-bg: rgba(0, 0, 0, 0.72);
+  --skeleton-shine: #2d2c28;
+
+  /* Crisp hairline warm graphite borders */
+  --border: #2c2b28;
+  --border-subtle: #242320;
+  --border-strong: #3d3b36;
+  --border-hover: #54514a;
+  --border-focus: #f0ede6;
+  --focus-ring: rgba(240, 237, 230, 0.12);
+
+  /* Warm parchment ivory typography ink */
+  --ink-primary: #f3f1ec;
+  --ink-secondary: #b7b3a9;
+  --ink-muted: #8f8b81;
+
+  /* Inverted parchment-ivory primary actions + restrained muted sage-teal accents */
+  --brand: #f0ede6;
+  --brand-hover: #ffffff;
+  --brand-ink: #141413;
+  --brand-badge-bg: rgba(20, 20, 19, 0.16);
+  --brand-soft: rgba(240, 237, 230, 0.075);
+  --brand-border: rgba(240, 237, 230, 0.2);
+  --brand-mark-bg: #232220;
+  --brand-mark-stroke: #3d3b36;
+  --brand-mark-ink: #f3f1ec;
+  --brand-mark-accent: #4fb3a7;
+
+  --accent: #4fb3a7;
+  --accent-hover: #67c7bc;
+  --accent-ink: #0f1716;
+  --accent-bg: rgba(79, 179, 167, 0.1);
+  --accent-border: rgba(79, 179, 167, 0.28);
+
+  /* Auth split hero panel (deep recessed charcoal with crisp hairline divider) */
+  --hero-aside-bg: #141413;
+  --hero-aside-border: #2c2b28;
+  --hero-aside-ink: #f3f1ec;
+  --hero-aside-copy: #b7b3a9;
+  --hero-aside-item: #dedad0;
+  --hero-aside-rule: rgba(243, 241, 236, 0.12);
+  --hero-aside-check: #4fb3a7;
+
+  /* Calibrated semantic risk tones on charcoal (high legibility, zero neon) */
+  --risk-high: #f2746b;
+  --risk-high-solid: #d94b41;
+  --risk-high-hover: #b83b32;
+  --risk-high-bg: rgba(217, 75, 65, 0.14);
+  --risk-high-border: rgba(242, 116, 107, 0.32);
+
+  --risk-med: #e8b45a;
+  --risk-med-solid: #cf8e26;
+  --risk-med-bg: rgba(207, 142, 38, 0.14);
+  --risk-med-border: rgba(232, 180, 90, 0.32);
+
+  --risk-low: #61c48f;
+  --risk-low-solid: #2f9e66;
+  --risk-low-bg: rgba(47, 158, 102, 0.14);
+  --risk-low-border: rgba(97, 196, 143, 0.32);
+  --health-ok-ring: rgba(97, 196, 143, 0.22);
+
+  /* Inline redline word diff on charcoal */
+  --diff-del-bg: rgba(217, 75, 65, 0.22);
+  --diff-del-ink: #fca5a5;
+  --diff-add-bg: rgba(47, 158, 102, 0.22);
+  --diff-add-ink: #86efac;
+
+  /* Crisp dark architectural elevation with subtle top hairline (zero glow) */
+  --shadow-xs:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --shadow-sm:
+    0 2px 6px rgba(0, 0, 0, 0.4),
+    0 6px 14px -4px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-card-hover:
+    0 4px 10px rgba(0, 0, 0, 0.45),
+    0 16px 32px -10px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-md:
+    0 6px 16px -2px rgba(0, 0, 0, 0.5),
+    0 20px 44px -12px rgba(0, 0, 0, 0.6);
+  --shadow-lg:
+    0 14px 32px -6px rgba(0, 0, 0, 0.65),
+    0 36px 72px -18px rgba(0, 0, 0, 0.78);
+}
+
+/* Smooth crossfade strictly during user-initiated theme toggle */
+.theme-transitioning,
+.theme-transitioning *,
+.theme-transitioning *::before,
+.theme-transitioning *::after {
+  transition:
+    background-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1) !important;
 }

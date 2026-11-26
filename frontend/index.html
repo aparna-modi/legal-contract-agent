@@ -16,6 +16,20 @@
       content="Document-grounded contract review: plain-English clause explanations, risk scoring, revision diffs, playbook compliance, contract drafting, and citation-backed Q&amp;A."
     />
     <meta name="theme-color" content="#f7f6f2" />
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("lca_theme");
+          if (t === "dark") {
+            document.documentElement.setAttribute("data-theme", "dark");
+            var m = document.querySelector('meta[name="theme-color"]');
+            if (m) m.setAttribute("content", "#111110");
+          } else {
+            document.documentElement.setAttribute("data-theme", "light");
+          }
+        } catch (e) {}
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

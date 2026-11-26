@@ -128,25 +128,25 @@ export default function Analytics() {
               </div>
               <div className="donut-layout">
                 <svg className="donut-svg" viewBox="0 0 110 110" role="img" aria-label="Risk distribution donut chart">
-                  <circle cx="55" cy="55" r="42" fill="none" stroke="#e4e1d8" strokeWidth="13" />
+                  <circle cx="55" cy="55" r="42" fill="none" stroke="var(--border)" strokeWidth="13" />
                   {totalRisk > 0 && (
                     <>
                       <motion.circle
-                        cx="55" cy="55" r="42" fill="none" stroke="#079455" strokeWidth="13"
+                        cx="55" cy="55" r="42" fill="none" stroke="var(--risk-low-solid)" strokeWidth="13"
                         initial={{ strokeDasharray: `0 ${C}` }}
                         animate={{ strokeDasharray: `${lowArc} ${C}` }}
                         transition={{ duration: 0.55, ease: EASE_EDITORIAL }}
                         strokeDashoffset={0} transform="rotate(-90 55 55)"
                       />
                       <motion.circle
-                        cx="55" cy="55" r="42" fill="none" stroke="#d97706" strokeWidth="13"
+                        cx="55" cy="55" r="42" fill="none" stroke="var(--risk-med-solid)" strokeWidth="13"
                         initial={{ strokeDasharray: `0 ${C}` }}
                         animate={{ strokeDasharray: `${medArc} ${C}` }}
                         transition={{ duration: 0.55, delay: 0.08, ease: EASE_EDITORIAL }}
                         strokeDashoffset={-lowArc} transform="rotate(-90 55 55)"
                       />
                       <motion.circle
-                        cx="55" cy="55" r="42" fill="none" stroke="#d92d20" strokeWidth="13"
+                        cx="55" cy="55" r="42" fill="none" stroke="var(--risk-high-solid)" strokeWidth="13"
                         initial={{ strokeDasharray: `0 ${C}` }}
                         animate={{ strokeDasharray: `${highArc} ${C}` }}
                         transition={{ duration: 0.55, delay: 0.16, ease: EASE_EDITORIAL }}
