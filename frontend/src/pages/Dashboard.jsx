@@ -24,18 +24,18 @@ const QUICK_QUERIES = [
 const LANDING_CAPABILITIES = [
   {
     icon: ShieldAlertIcon,
-    title: "Clause & Risk Triage",
-    body: "Classifies 14 legal categories, scores severity, generates an executive negotiation brief, extracts a deadlines ledger, and drafts missing protections.",
+    title: "Clause & Risk Review",
+    body: "Breaks down each clause in plain English, flags unfair terms, lists important deadlines, and highlights missing protections.",
   },
   {
     icon: MessageIcon,
-    title: "Citation-Backed Q&A",
-    body: "Hold multi-turn conversations anchored to exact pages and verbatim excerpts—with explicit refusal whenever a contract is silent.",
+    title: "Answers Backed by the Text",
+    body: "Ask follow-up questions about any contract and jump straight to the exact page—never guessing when a detail isn't there.",
   },
   {
     icon: CompareIcon,
-    title: "Redlines, Playbooks & Drafting",
-    body: "Compare revisions with word-level diffs, run semantic firm-playbook audits, generate stance-aware redlines, and draft agreements from 7 templates.",
+    title: "Drafting, Redlines & Playbooks",
+    body: "Start from 7 ready templates, compare two versions word by word, and check agreements against your own review rules.",
   },
 ];
 
@@ -285,7 +285,7 @@ export default function Dashboard() {
       await contractsApi.remove(token, deleteTarget._id);
       setContracts((prev) => prev.filter((c) => c._id !== deleteTarget._id));
       if (activeContract?._id === deleteTarget._id) setActiveContract(null);
-      setBanner({ tone: "success", text: `Removed "${deleteTarget.title || deleteTarget.fileName}" and purged its vectors.` });
+      setBanner({ tone: "success", text: `Deleted "${deleteTarget.title || deleteTarget.fileName}".` });
       setDeleteTarget(null);
       contractsApi.vectorStats(token).then(setVectorStats).catch(() => {});
     } catch (err) {
@@ -300,21 +300,20 @@ export default function Dashboard() {
       <PageReveal className="landing-page">
         <section className="hero-editorial">
           <div className="hero-content">
-            <span className="hero-eyebrow">Document-Grounded Legal Review</span>
-            <h1 className="hero-title">Understand every obligation, risk, and exit clause before you sign.</h1>
+            <span className="hero-eyebrow">Contract Review Made Clear</span>
+            <h1 className="hero-title">Know what you&apos;re signing—every obligation, deadline, and risk.</h1>
             <p className="hero-subtitle">
-              Upload employment agreements, vendor MSAs, NDAs, or leases—or draft clean agreements from scratch.
-              Legal Contract Agent extracts structured clauses, flags high-risk terms and missing protections,
-              compares revisions side by side, and answers questions strictly with page and section citations.
+              Upload job offers, leases, vendor contracts, or NDAs—or draft a clean agreement from scratch.
+              Read clauses in plain English, compare edits side by side, and get answers tied directly to the page.
             </p>
             <div className="hero-actions">
               <Link to="/register" className="btn btn-primary btn-lg">
-                Create free workspace <ArrowRightIcon size={15} />
+                Get started free <ArrowRightIcon size={15} />
               </Link>
               <Link to="/login" className="btn btn-secondary btn-lg">Sign in</Link>
             </div>
             <p className="hero-meta-note">
-              Supports PDF (with automatic OCR for scanned deeds), DOCX, and TXT · Private tenant isolation
+              Works with PDF (including scanned copies), DOCX, and TXT · Private to your account
             </p>
           </div>
 
@@ -343,7 +342,7 @@ export default function Dashboard() {
         <div>
           <h1 className="page-heading">Contract Workspace</h1>
           <p className="page-description">
-            Review extracted clauses, inspect risk profiles and deadlines, draft agreements, and query clauses with verifiable citations.
+            Review clauses, check key deadlines and risks, draft new agreements, and search across your saved files.
           </p>
         </div>
         <div className="page-header-actions">
@@ -395,9 +394,9 @@ export default function Dashboard() {
           <span className="kpi-sub">{riskFilter === "high" ? "Showing high-risk docs" : "Click to filter high-risk"}</span>
         </StaggerItem>
         <StaggerItem className="kpi-card">
-          <span className="kpi-label">Indexed Passages</span>
+          <span className="kpi-label">Searchable Passages</span>
           <span className="kpi-value"><AnimatedNumber value={metrics.vectors} /></span>
-          <span className="kpi-sub">Tenant-isolated vectors</span>
+          <span className="kpi-sub">Ready for instant Q&amp;A</span>
         </StaggerItem>
       </StaggerContainer>
 
@@ -600,10 +599,10 @@ export default function Dashboard() {
                       <td>
                         {done ? (
                           <span className="mono-caption">
-                            {doc.pageCount || 1}p · {doc.totalSections || 0} sec · {(doc.totalTokens || 0).toLocaleString()} tok
+                            {doc.pageCount || 1} {doc.pageCount === 1 ? "page" : "pages"} · {doc.totalSections || 0} sections
                           </span>
                         ) : (
-                          <span className="muted-caption">Ready for parsing</span>
+                          <span className="muted-caption">Ready to analyze</span>
                         )}
                       </td>
                       <td className="col-actions">
@@ -691,7 +690,7 @@ export default function Dashboard() {
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         title="Delete contract?"
-        message={`Permanently remove "${deleteTarget?.title || deleteTarget?.fileName}", all extracted clauses, and its indexed vectors?`}
+        message={`Permanently delete "${deleteTarget?.title || deleteTarget?.fileName}" and its saved analysis?`}
         confirmLabel="Delete permanently"
         loading={deleting}
         onConfirm={handleDelete}

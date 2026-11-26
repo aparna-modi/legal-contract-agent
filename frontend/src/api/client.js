@@ -251,4 +251,6 @@ export const analyticsApi = {
 export const systemApi = {
   status: (token) => request("/api/system/status", { token }),
   adminOverview: (token) => request("/api/system/admin/overview", { token }),
+  adminAudit: (token, { page = 1, limit = 10 } = {}) =>
+    request(`/api/system/admin/audit?page=${page}&limit=${limit}`, { token }),
 };

@@ -193,7 +193,7 @@ export default function Compare() {
       <div className="page-header">
         <div>
           <h1 className="page-heading">Revision Comparison</h1>
-          <p className="page-description">Align clauses across two agreements with word-level redlines, risk-shift telemetry, and instant counter-proposals.</p>
+          <p className="page-description">Compare two versions of a contract side by side to see every changed word, risk shift, and suggested counter-edit.</p>
         </div>
         <div className="page-header-actions">
           {result && (
@@ -252,7 +252,7 @@ export default function Compare() {
           </form>
 
           {error && <div className="alert alert-error">{error}</div>}
-          {comparing && <div className="surface-card state-box"><div className="spinner" /><p>Matching clauses semantically and computing commercial risk shift...</p></div>}
+          {comparing && <div className="surface-card state-box"><div className="spinner" /><p>Comparing clauses and checking how risk changed between versions...</p></div>}
 
           {result && (
             <div className="compare-results">

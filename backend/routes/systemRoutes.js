@@ -74,10 +74,15 @@ router.get("/admin/overview", protect, requireRole("admin"), async (req, res) =>
         ? { $or: [{ organization: req.user.organizationId }, { user: { $in: scopedUserIds } }] }
         : { user: req.user._id };
     const qaFilter = globalScope ? {} : { user: { $in: scopedUserIds } };
-    const auditFilter = globalScope ? {} : { user: { $in: scopedUserIds } };
+    const baseAuditFilter = globalScope ? {} : { user: { $in: scopedUserIds } };
+    const auditFilter = { ...baseAuditFilter, action: { $ne: "token_refresh" } };
 
-    const [users, docs, qaRows, fbRows, auditEntries, aiNodes] = await Promise.all([
+    const [users, roleAgg, docs, qaRows, fbRows, auditEntries, auditTotal, aiNodes] = await Promise.all([
       User.find(userFilter).sort({ createdAt: -1 }).limit(25).select("name email role organization lastLoginAt createdAt").lean(),
+      User.aggregate([
+        ...(Object.keys(userFilter).length ? [{ $match: userFilter }] : []),
+        { $group: { _id: { $ifNull: ["$role", "reviewer"] }, count: { $sum: 1 } } },
+      ]),
       DocumentModel.find(docFilter).select("_id status riskSummary createdAt").lean(),
       QuestionAnswerModel.find(qaFilter).select("insufficientInformation latencyMs").lean(),
       FeedbackModel.aggregate([
@@ -86,10 +91,11 @@ router.get("/admin/overview", protect, requireRole("admin"), async (req, res) =>
       ]),
       AuditLogModel.find(auditFilter)
         .sort({ createdAt: -1 })
-        .limit(30)
+        .limit(5)
         .populate("user", "name email")
         .select("user action resourceType resourceId summary ipAddress createdAt")
         .lean(),
+      AuditLogModel.countDocuments(auditFilter),
       aiClient.probeHealth(),
     ]);
 
@@ -97,7 +103,10 @@ router.get("/admin/overview", protect, requireRole("admin"), async (req, res) =>
       ? await ClauseModel.countDocuments(globalScope ? {} : { document: { $in: docs.map((d) => d._id) } })
       : 0;
     const totalUsers = await User.countDocuments(userFilter);
-    const roleCounts = users.reduce((acc, u) => ({ ...acc, [u.role || "reviewer"]: (acc[u.role || "reviewer"] || 0) + 1 }), { admin: 0, counsel: 0, reviewer: 0 });
+    const roleCounts = roleAgg.reduce(
+      (acc, r) => ({ ...acc, [r._id || "reviewer"]: r.count }),
+      { admin: 0, counsel: 0, reviewer: 0 }
+    );
     const analyzed = docs.filter((d) => d.status === "completed");
     const failed = docs.filter((d) => d.status === "failed").length;
     const avgRiskScore = analyzed.length
@@ -139,6 +148,7 @@ router.get("/admin/overview", protect, requireRole("admin"), async (req, res) =>
         aiPool: { strategy: pool.strategy, totalNodes: pool.totalNodes, healthyNodes: aiNodes.filter((n) => n.reachable).length, nodes: aiNodes },
       },
       auditLogs: auditEntries,
+      auditTotal,
     });
   } catch (err) {
     console.error("Admin overview error:", err.message);
@@ -149,6 +159,10 @@ router.get("/admin/overview", protect, requireRole("admin"), async (req, res) =>
 router.get("/admin/audit", protect, requireRole("admin"), async (req, res) => {
   try {
     const globalScope = isPlatformAdmin(req.user);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const includeRoutine = String(req.query.includeRoutine || "").toLowerCase() === "true";
+
     let auditFilter = {};
     if (!globalScope) {
       const scopedUsers = req.user.organizationId
@@ -156,12 +170,31 @@ router.get("/admin/audit", protect, requireRole("admin"), async (req, res) => {
         : [{ _id: req.user._id }];
       auditFilter = { user: { $in: scopedUsers.map((u) => u._id) } };
     }
-    const entries = await AuditLogModel.find(auditFilter)
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .select("user action resourceType resourceId summary ipAddress requestId createdAt")
-      .lean();
-    res.json({ scope: globalScope ? "platform" : "workspace", count: entries.length, entries });
+    if (!includeRoutine) {
+      auditFilter = { ...auditFilter, action: { $ne: "token_refresh" } };
+    }
+
+    const [total, entries] = await Promise.all([
+      AuditLogModel.countDocuments(auditFilter),
+      AuditLogModel.find(auditFilter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate("user", "name email")
+        .select("user action resourceType resourceId summary ipAddress requestId createdAt")
+        .lean(),
+    ]);
+
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    res.json({
+      scope: globalScope ? "platform" : "workspace",
+      page,
+      limit,
+      total,
+      totalPages,
+      count: entries.length,
+      entries,
+    });
   } catch (err) {
     console.error("Admin audit error:", err.message);
     res.status(500).json({ message: "Failed to retrieve admin audit logs." });

@@ -137,7 +137,7 @@ export default function Playbook() {
       <div className="page-header">
         <div>
           <h1 className="page-heading">Legal Playbook &amp; Compliance</h1>
-          <p className="page-description">Load jurisdiction rule packs, generate rules from plain-English policy guidelines, and run hybrid AI compliance audits.</p>
+          <p className="page-description">Pick a standard rule pack or write your own review rules in plain English, then check any contract against them.</p>
         </div>
       </div>
 
@@ -171,7 +171,7 @@ export default function Playbook() {
 
       <section className="surface-card settings-card">
         <div className="section-head-row">
-          <span className="section-eyebrow"><ShieldCheckIcon size={14} /> Run Hybrid AI Compliance Audit</span>
+          <span className="section-eyebrow"><ShieldCheckIcon size={14} /> Check a Contract Against Your Playbook</span>
           {evaluation && (
             <span className={`risk-pill ${evaluation.compliance_score >= 80 ? "risk-low" : evaluation.compliance_score >= 50 ? "risk-medium" : "risk-high"}`}>
               {evaluation.compliance_score}% COMPLIANT

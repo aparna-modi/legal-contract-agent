@@ -94,14 +94,14 @@ textarea {
 }
 
 .topbar-inner {
-  max-width: 1180px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 0 20px;
   height: 60px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 16px;
 }
 
 .topbar-left,
@@ -111,18 +111,32 @@ textarea {
 .nav-tabs {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .topbar-left {
-  gap: 28px;
+  gap: 20px;
+  min-width: 0;
+}
+
+.topbar-right,
+.account-menu,
+.auth-nav {
+  flex-shrink: 0;
+}
+
+.nav-tabs {
+  gap: 3px;
+  flex-shrink: 0;
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
   text-decoration: none;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .brand-name {
@@ -130,6 +144,8 @@ textarea {
   font-size: 15px;
   letter-spacing: -0.015em;
   color: var(--ink-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .brand-accent {
@@ -142,9 +158,11 @@ textarea {
   color: var(--ink-secondary);
   font-size: 13.5px;
   font-weight: 500;
-  padding: 6px 11px;
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
   transition: color 0.16s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .nav-item-label {
@@ -182,6 +200,8 @@ textarea {
   color: var(--ink-secondary);
   font-size: 12.5px;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: border-color 0.15s, color 0.15s, background-color 0.15s;
 }
 
@@ -199,17 +219,21 @@ textarea {
   border: 1px solid var(--border-strong);
   background: var(--bg-surface);
   color: var(--ink-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .account-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 11px 4px 5px;
+  gap: 7px;
+  padding: 4px 10px 4px 5px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg-surface);
   text-decoration: none;
+  flex-shrink: 0;
+  max-width: 175px;
   transition: border-color 0.15s, background-color 0.15s;
 }
 
@@ -230,6 +254,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .theme-toggle-btn {
@@ -291,6 +316,16 @@ textarea {
   font-size: 13px;
   font-weight: 500;
   color: var(--ink-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+  display: inline-block;
+}
+
+.desktop-signout {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .main-content {
@@ -3776,7 +3811,51 @@ textarea {
   white-space: nowrap;
 }
 
+.audit-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.pagination-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* Responsive */
+@media (max-width: 1180px) {
+  .cmd-trigger-btn span,
+  .cmd-trigger-btn kbd {
+    display: none;
+  }
+  .cmd-trigger-btn {
+    padding: 6px 8px;
+  }
+  .account-name {
+    max-width: 96px;
+  }
+  .topbar-left {
+    gap: 14px;
+  }
+}
+
+@media (max-width: 1020px) {
+  .nav-tabs,
+  .cmd-trigger-btn,
+  .desktop-signout {
+    display: none;
+  }
+  .mobile-menu-btn {
+    display: inline-flex;
+  }
+}
+
 @media (max-width: 960px) {
   .hero-editorial,
   .draft-studio-grid {
@@ -3810,14 +3889,6 @@ textarea {
   }
   .auth-aside {
     display: none;
-  }
-  .nav-tabs,
-  .cmd-trigger-btn,
-  .desktop-signout {
-    display: none;
-  }
-  .mobile-menu-btn {
-    display: inline-flex;
   }
 }
 

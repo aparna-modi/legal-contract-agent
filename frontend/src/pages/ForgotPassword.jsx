@@ -30,7 +30,7 @@ export default function ForgotPassword() {
         <div className="auth-panel-head">
           <BrandMark size={28} />
           <h1 style={{ marginTop: 10 }}>Reset password</h1>
-          <p>Enter your account email and we will issue a single-use 30-minute reset link.</p>
+          <p>Enter your email address and we&apos;ll send a password reset link valid for 30 minutes.</p>
         </div>
 
         {error && <div className="alert alert-error">{error}</div>}
@@ -54,13 +54,13 @@ export default function ForgotPassword() {
         <form onSubmit={handleSubmit} className="auth-form">
           <div className="field">
             <label htmlFor="fp-email" className="field-label">
-              Email address
+              Email
             </label>
             <input
               id="fp-email"
               type="email"
               className="text-input"
-              placeholder="name@company.com"
+              placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required

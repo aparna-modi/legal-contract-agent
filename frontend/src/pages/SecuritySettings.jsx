@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { authApi, systemApi, teamApi } from "../api/client";
+import { authApi, teamApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import {
-  CheckCircleIcon, ClockIcon, LayersIcon, LockIcon, LogOutIcon,
-  PlusIcon, RefreshIcon, ServerIcon, ShieldCheckIcon, TrashIcon,
+  ClockIcon, LayersIcon, LockIcon, LogOutIcon,
+  PlusIcon, RefreshIcon, ShieldCheckIcon, TrashIcon,
 } from "../components/Icons";
 import { PageReveal } from "../components/Motion";
 
@@ -33,7 +33,6 @@ export default function SecuritySettings() {
   const [busy, setBusy] = useState({});
   const [msg, setMsg] = useState({});
   const [sessions, setSessions] = useState([]);
-  const [sysStatus, setSysStatus] = useState(null);
   const [team, setTeam] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -41,13 +40,11 @@ export default function SecuritySettings() {
     if (!token) return;
     setLoading(true);
     try {
-      const [s, st, t] = await Promise.all([
+      const [s, t] = await Promise.all([
         authApi.sessions(token).catch(() => ({ sessions: [] })),
-        systemApi.status(token).catch(() => null),
         teamApi.get(token).catch(() => null),
       ]);
       setSessions(s.sessions || []);
-      setSysStatus(st);
       if (t?.organization) setTeam(t.organization);
     } finally {
       setLoading(false);
@@ -59,13 +56,11 @@ export default function SecuritySettings() {
     let active = true;
     Promise.all([
       authApi.sessions(token).catch(() => ({ sessions: [] })),
-      systemApi.status(token).catch(() => null),
       teamApi.get(token).catch(() => null),
     ])
-      .then(([s, st, t]) => {
+      .then(([s, t]) => {
         if (!active) return;
         setSessions(s.sessions || []);
-        setSysStatus(st);
         if (t?.organization) {
           setTeam(t.organization);
           if (user && (user.role !== t.organization.myRole || user.organizationId !== t.organization.id)) {
@@ -144,7 +139,7 @@ export default function SecuritySettings() {
       <div className="page-header">
         <div>
           <h1 className="page-heading">Account, Team &amp; Security</h1>
-          <p className="page-description">Workspace identity, team RBAC, credential rotation, sessions, and live cluster health.</p>
+          <p className="page-description">Manage your profile, password, team sharing, and signed-in devices.</p>
         </div>
         <button type="button" className="btn btn-secondary" onClick={fetchAll}>
           <RefreshIcon size={15} /> Refresh
@@ -154,7 +149,7 @@ export default function SecuritySettings() {
       <div className="settings-grid">
         <section className="surface-card settings-card">
           <div className="section-head-row">
-            <span className="section-eyebrow"><ShieldCheckIcon size={14} /> Profile &amp; Identity</span>
+            <span className="section-eyebrow"><ShieldCheckIcon size={14} /> Profile</span>
             <span className="mono-tag">{(team?.myRole || user?.role || "reviewer").toUpperCase()}</span>
           </div>
           {msg.profile && <div className={`alert alert-${msg.profile.tone}`}>{msg.profile.text}</div>}
@@ -164,12 +159,12 @@ export default function SecuritySettings() {
               <input id="sec-name" className="text-input" value={profile.name} onChange={(e) => setProfile((p) => ({ ...p, name: e.target.value }))} required />
             </div>
             <div className="field">
-              <label htmlFor="sec-email" className="field-label">Email address</label>
+              <label htmlFor="sec-email" className="field-label">Email</label>
               <input id="sec-email" className="text-input" value={user?.email || ""} disabled />
             </div>
             <div className="field">
-              <label htmlFor="sec-org" className="field-label">Workspace / Organization</label>
-              <input id="sec-org" className="text-input" value={profile.organization} onChange={(e) => setProfile((p) => ({ ...p, organization: e.target.value }))} placeholder="e.g., Acme Legal Ops" />
+              <label htmlFor="sec-org" className="field-label">Team or Organization</label>
+              <input id="sec-org" className="text-input" value={profile.organization} onChange={(e) => setProfile((p) => ({ ...p, organization: e.target.value }))} placeholder="Personal Workspace" />
             </div>
             <div className="settings-form-foot">
               <span className="mono-caption">Last sign-in: {fmtTime(user?.lastLoginAt)}</span>
@@ -180,8 +175,7 @@ export default function SecuritySettings() {
 
         <section className="surface-card settings-card">
           <div className="section-head-row">
-            <span className="section-eyebrow"><LockIcon size={14} /> Password &amp; Token Rotation</span>
-            <span className="mono-caption">bcrypt-12 + HS256</span>
+            <span className="section-eyebrow"><LockIcon size={14} /> Password</span>
           </div>
           {msg.pw && <div className={`alert alert-${msg.pw.tone}`}>{msg.pw.text}</div>}
           <form onSubmit={changePassword} className="settings-form">
@@ -218,8 +212,8 @@ export default function SecuritySettings() {
       <section className="surface-card settings-card">
         <div className="section-head-row">
           <div>
-            <span className="section-eyebrow"><LayersIcon size={14} /> Organization Workspace &amp; Team RBAC</span>
-            <p className="muted-caption">{team ? `${team.name} · ${team.memberCount} member(s)` : "Share contracts with Admin, Counsel, and Reviewer roles."}</p>
+            <span className="section-eyebrow"><LayersIcon size={14} /> Team &amp; Sharing</span>
+            <p className="muted-caption">{team ? `${team.name} · ${team.memberCount} member(s)` : "Invite teammates to review and share contracts together."}</p>
           </div>
           {team?.inviteCode && <span className="mono-tag">Invite code: {team.inviteCode}</span>}
         </div>
@@ -270,7 +264,7 @@ export default function SecuritySettings() {
         <div className="settings-grid">
           {team?.myRole === "admin" && (
             <form onSubmit={inviteMember} className="qa-form">
-              <input type="email" className="text-input" placeholder="colleague@company.com" value={invite.email} onChange={(e) => setInvite((i) => ({ ...i, email: e.target.value }))} required />
+              <input type="email" className="text-input" placeholder="teammate@example.com" value={invite.email} onChange={(e) => setInvite((i) => ({ ...i, email: e.target.value }))} required />
               <select className="select-compact" value={invite.role} onChange={(e) => setInvite((i) => ({ ...i, role: e.target.value }))}>
                 <option value="reviewer">Reviewer</option>
                 <option value="counsel">Counsel</option>
@@ -290,7 +284,7 @@ export default function SecuritySettings() {
         <div className="section-head-row">
           <div>
             <span className="section-eyebrow"><ClockIcon size={14} /> Active Sessions ({sessions.length})</span>
-            <p className="muted-caption">Rotating HttpOnly refresh token families with replay theft detection.</p>
+            <p className="muted-caption">Devices currently signed in to your account.</p>
           </div>
           <button type="button" className="btn btn-danger btn-sm" onClick={async () => { await logoutAll(); navigate("/login"); }}>
             <LogOutIcon size={14} /> Sign out all devices
@@ -299,7 +293,7 @@ export default function SecuritySettings() {
         {loading ? (
           <div className="state-box"><div className="spinner" /><p>Loading sessions...</p></div>
         ) : sessions.length === 0 ? (
-          <p className="muted-caption">No active refresh sessions recorded.</p>
+          <p className="muted-caption">No active sessions recorded.</p>
         ) : (
           <div className="session-list">
             {sessions.map((s) => (
@@ -319,65 +313,6 @@ export default function SecuritySettings() {
               </div>
             ))}
           </div>
-        )}
-      </section>
-
-      <section className="surface-card settings-card">
-        <div className="section-head-row">
-          <div>
-            <span className="section-eyebrow"><ServerIcon size={14} /> Infrastructure &amp; Load-Balancer Telemetry</span>
-            <p className="muted-caption">Storage backend, Redis rate-limit store, async worker queue, and AI circuit breakers.</p>
-          </div>
-          {sysStatus && <span className="mono-tag">API v{sysStatus.version}</span>}
-        </div>
-        {loading ? (
-          <div className="state-box"><div className="spinner" /><p>Probing services...</p></div>
-        ) : !sysStatus ? (
-          <p className="muted-caption">Telemetry currently unavailable.</p>
-        ) : (
-          <>
-            <div className="infra-grid">
-              <div className="infra-stat">
-                <span className="kpi-label">Database &amp; Storage</span>
-                <strong className="infra-value"><CheckCircleIcon size={14} className="text-accent" /> MongoDB · {(sysStatus.storage?.provider || "local").toUpperCase()}</strong>
-                <span className="mono-caption">Redis: {sysStatus.redis?.connected ? "Connected" : sysStatus.redis?.mode || "Memory"}</span>
-              </div>
-              <div className="infra-stat">
-                <span className="kpi-label">AI Worker Pool</span>
-                <strong className="infra-value">{sysStatus.aiPool?.healthyNodes || 0} / {sysStatus.aiPool?.totalNodes || 0} Healthy</strong>
-                <span className="mono-caption">{sysStatus.aiPool?.strategy}</span>
-              </div>
-              <div className="infra-stat">
-                <span className="kpi-label">Async Job Queue</span>
-                <strong className="infra-value">{sysStatus.queue?.active || 0} active · {sysStatus.queue?.queued || 0} queued</strong>
-                <span className="mono-caption">{sysStatus.queue?.completed || 0} completed (max {sysStatus.queue?.maxConcurrency || 3})</span>
-              </div>
-              <div className="infra-stat">
-                <span className="kpi-label">Service Auth</span>
-                <strong className="infra-value">Tenant-Scoped RBAC</strong>
-                <span className="mono-caption">Internal key: {sysStatus.security?.serviceAuth ? "Enforced" : "Dev mode"}</span>
-              </div>
-            </div>
-            {sysStatus.aiPool?.nodes?.length > 0 && (
-              <div className="node-list">
-                {sysStatus.aiPool.nodes.map((node, i) => (
-                  <div key={node.url || i} className="node-row">
-                    <div className="node-left">
-                      <span className={`health-dot ${node.reachable ? "health-ok" : "health-degraded"}`} />
-                      <div>
-                        <strong className="mono-inline">{node.url}</strong>
-                        <div className="mono-caption">LLM: {node.llmProvider || "n/a"} · Embeddings: {node.embeddingProvider || "n/a"}</div>
-                      </div>
-                    </div>
-                    <div className="node-right">
-                      <span className={`risk-pill ${node.circuitState === "CLOSED" ? "risk-low" : "risk-high"}`}>CIRCUIT: {node.circuitState}</span>
-                      {node.latencyMs !== undefined && <span className="mono-caption">{node.latencyMs}ms</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
         )}
       </section>
     </PageReveal>

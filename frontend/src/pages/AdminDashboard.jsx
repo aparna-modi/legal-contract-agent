@@ -8,22 +8,78 @@ import { PageReveal } from "../components/Motion";
 const fmtDate = (d) =>
   d ? new Date(d).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
+const ACTION_LABELS = {
+  register: "Sign Up",
+  login: "Sign In",
+  login_failed: "Failed Login",
+  logout: "Sign Out",
+  logout_all: "Sign Out All",
+  token_refresh: "Session Refresh",
+  token_reuse_detected: "Security Alert",
+  password_changed: "Password Updated",
+  password_reset_requested: "Reset Requested",
+  password_reset_completed: "Password Reset",
+  profile_updated: "Profile Updated",
+  session_revoked: "Session Revoked",
+  team_invited: "Team Invite",
+  team_joined: "Joined Team",
+  team_role_updated: "Role Updated",
+  team_member_removed: "Member Removed",
+  upload: "Uploaded",
+  extract: "Analyzed",
+  ask: "Contract Q&A",
+  search: "Library Search",
+  compare: "Compared",
+  draft_generated: "Draft Created",
+  draft_revised: "Draft Revised",
+  redline_suggested: "Redline Suggested",
+  missing_clause_drafted: "Clause Drafted",
+  playbook_evaluated: "Playbook Check",
+  playbook_updated: "Playbook Saved",
+  playbook_rules_generated: "Rules Generated",
+  export_report: "Report Exported",
+  delete: "Deleted",
+  feedback: "Answer Rated",
+};
+
+const AUDIT_PAGE_SIZE = 10;
+
 export default function AdminDashboard() {
   const { token, user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const [auditExpanded, setAuditExpanded] = useState(false);
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditData, setAuditData] = useState(null);
+  const [auditLoading, setAuditLoading] = useState(false);
+
   const load = useCallback(async () => {
     if (!token) return;
     setLoading(true);
     try {
-      setData(await systemApi.adminOverview(token));
+      const overview = await systemApi.adminOverview(token);
+      setData(overview);
       setError(null);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  }, [token]);
+
+  const loadAuditPage = useCallback(async (page) => {
+    if (!token) return;
+    setAuditLoading(true);
+    try {
+      const res = await systemApi.adminAudit(token, { page, limit: AUDIT_PAGE_SIZE });
+      setAuditData(res);
+      setAuditPage(res.page || page);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAuditLoading(false);
     }
   }, [token]);
 
@@ -37,13 +93,23 @@ export default function AdminDashboard() {
     return () => { active = false; };
   }, [token, user?.role]);
 
+  const handleToggleAudit = () => {
+    if (auditExpanded) {
+      setAuditExpanded(false);
+      setAuditPage(1);
+    } else {
+      setAuditExpanded(true);
+      loadAuditPage(1);
+    }
+  };
+
   if (user?.role !== "admin") {
     return (
       <div className="surface-card empty-box centered-card">
         <LockIcon size={28} />
-        <h3>Administrator access required</h3>
-        <p>Platform-wide usage, feedback monitoring, and cross-account audit logs are restricted to Admin roles.</p>
-        <Link to="/security" className="btn btn-primary">Manage Workspace Role</Link>
+        <h3>Admin access required</h3>
+        <p>Account usage, review quality metrics, and audit logs are only available to administrators.</p>
+        <Link to="/security" className="btn btn-primary">Go to Account Settings</Link>
       </div>
     );
   }
@@ -52,14 +118,25 @@ export default function AdminDashboard() {
   const contracts = data?.contracts || {};
   const quality = data?.quality || {};
   const infra = data?.infrastructure || {};
-  const logs = data?.auditLogs || [];
+  const previewLogs = data?.auditLogs || [];
+  const auditTotal = data?.auditTotal ?? previewLogs.length;
+
+  const visibleLogs = auditExpanded ? (auditData?.entries || previewLogs) : previewLogs.slice(0, 5);
+  const totalPages = auditData?.totalPages || Math.max(1, Math.ceil(auditTotal / AUDIT_PAGE_SIZE));
+
+  const aiNodes = infra.aiPool?.nodes || [];
+  const healthyNodes = infra.aiPool?.healthyNodes || 0;
+  const totalNodes = infra.aiPool?.totalNodes || 0;
+  const anyWaking = aiNodes.some((n) => n.status === "waking");
+
+  const feedbackTotal = (quality.feedbackUp || 0) + (quality.feedbackDown || 0);
 
   return (
     <PageReveal className="workspace-page">
       <div className="page-header">
         <div>
-          <h1 className="page-heading">Platform Admin Console</h1>
-          <p className="page-description">Cross-account usage, AI quality metrics, cluster telemetry, and security audit monitoring.</p>
+          <h1 className="page-heading">Admin Console</h1>
+          <p className="page-description">Account overview, review quality, service health, and workspace audit history.</p>
         </div>
         <button type="button" className="btn btn-secondary" onClick={load} disabled={loading}>
           <RefreshIcon size={15} /> Refresh
@@ -67,7 +144,7 @@ export default function AdminDashboard() {
       </div>
 
       {loading ? (
-        <div className="surface-card state-box"><div className="spinner" /><p>Loading platform metrics...</p></div>
+        <div className="surface-card state-box"><div className="spinner" /><p>Loading admin overview...</p></div>
       ) : error ? (
         <div className="alert alert-error">{error}</div>
       ) : (
@@ -79,28 +156,49 @@ export default function AdminDashboard() {
               <span className="kpi-sub">{users.roles?.admin || 0} admin · {users.roles?.counsel || 0} counsel · {users.roles?.reviewer || 0} reviewer</span>
             </div>
             <div className="kpi-card">
-              <span className="kpi-label">Platform Contracts</span>
+              <span className="kpi-label">Contracts</span>
               <span className="kpi-value">{contracts.total || 0}</span>
               <span className="kpi-sub">{contracts.analyzed || 0} analyzed · {contracts.totalClauses || 0} clauses</span>
             </div>
             <div className="kpi-card">
-              <span className="kpi-label">Grounded Q&amp;A Rate</span>
+              <span className="kpi-label">Answered Questions</span>
               <span className="kpi-value text-accent">
                 {quality.totalQuestions ? `${Math.round((quality.groundedCount / quality.totalQuestions) * 100)}%` : "—"}
               </span>
-              <span className="kpi-sub">{quality.totalQuestions || 0} queries · avg {((quality.avgLatencyMs || 0) / 1000).toFixed(2)}s</span>
+              <span className="kpi-sub">
+                {quality.totalQuestions
+                  ? `${quality.totalQuestions} queries · avg ${((quality.avgLatencyMs || 0) / 1000).toFixed(2)}s`
+                  : "No Q&A queries yet"}
+              </span>
             </div>
             <div className="kpi-card">
-              <span className="kpi-label">Global Helpfulness</span>
+              <span className="kpi-label">Answer Helpfulness</span>
               <span className="kpi-value">{quality.helpfulnessRate != null ? `${quality.helpfulnessRate}%` : "—"}</span>
-              <span className="kpi-sub">{quality.feedbackUp || 0} up · {quality.feedbackDown || 0} down</span>
+              <span className="kpi-sub">
+                {feedbackTotal > 0
+                  ? `${quality.feedbackUp || 0} helpful · ${quality.feedbackDown || 0} needs review`
+                  : "No ratings yet (rated in contract Q&A)"}
+              </span>
             </div>
           </div>
 
           <section className="surface-card settings-card">
             <div className="section-head-row">
               <span className="section-eyebrow"><ServerIcon size={14} /> Cluster &amp; Service Health</span>
-              <span className="mono-tag">{infra.aiPool?.healthyNodes || 0}/{infra.aiPool?.totalNodes || 0} AI Nodes Healthy</span>
+              <div className="row-actions">
+                <span className={`risk-pill ${healthyNodes === totalNodes && totalNodes > 0 ? "risk-low" : anyWaking ? "risk-medium" : "risk-high"}`}>
+                  {healthyNodes === totalNodes && totalNodes > 0
+                    ? `${healthyNodes}/${totalNodes} AI Nodes Healthy`
+                    : anyWaking
+                      ? "AI Node Waking Up"
+                      : `${healthyNodes}/${totalNodes} AI Nodes Healthy`}
+                </span>
+                {healthyNodes < totalNodes && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={load} disabled={loading}>
+                    <RefreshIcon size={13} /> Recheck
+                  </button>
+                )}
+              </div>
             </div>
             <div className="infra-grid">
               <div className="infra-stat">
@@ -109,21 +207,49 @@ export default function AdminDashboard() {
                 <span className="mono-caption">MongoDB</span>
               </div>
               <div className="infra-stat">
-                <span className="kpi-label">Object Storage</span>
+                <span className="kpi-label">Document Storage</span>
                 <strong className="infra-value">{(infra.storage || "local").toUpperCase()}</strong>
-                <span className="mono-caption">Pluggable S3/Local</span>
+                <span className="mono-caption">Active file store</span>
               </div>
               <div className="infra-stat">
-                <span className="kpi-label">Redis Store</span>
+                <span className="kpi-label">Cache &amp; Limits</span>
                 <strong className="infra-value">{infra.redis?.connected ? "Connected" : infra.redis?.mode || "Memory"}</strong>
-                <span className="mono-caption">Rate-limit &amp; Cache</span>
+                <span className="mono-caption">Redis store</span>
               </div>
               <div className="infra-stat">
-                <span className="kpi-label">Extraction Queue</span>
+                <span className="kpi-label">Analysis Queue</span>
                 <strong className="infra-value">{infra.queue?.active || 0} active · {infra.queue?.queued || 0} queued</strong>
                 <span className="mono-caption">{infra.queue?.completed || 0} completed</span>
               </div>
             </div>
+
+            {aiNodes.length > 0 && (
+              <div className="node-list">
+                {aiNodes.map((node, i) => (
+                  <div key={node.url || i} className="node-row">
+                    <div className="node-left">
+                      <span className={`health-dot ${node.reachable ? "health-ok" : "health-degraded"}`} />
+                      <div>
+                        <strong>AI Worker {aiNodes.length > 1 ? `#${i + 1}` : ""}</strong>
+                        <div className="mono-caption">
+                          {node.reachable
+                            ? `Model: ${node.llmProvider || "ready"} · Embeddings: ${node.embeddingProvider || "ready"}`
+                            : node.status === "waking"
+                              ? "Service is waking up from idle — click Recheck in a few seconds."
+                              : node.error || "Unable to reach AI service."}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="node-right">
+                      <span className={`risk-pill ${node.reachable ? "risk-low" : node.status === "waking" ? "risk-medium" : "risk-high"}`}>
+                        {node.reachable ? "HEALTHY" : node.status === "waking" ? "STARTING" : "OFFLINE"}
+                      </span>
+                      {node.latencyMs !== undefined && <span className="mono-caption">{node.latencyMs}ms</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <div className="analytics-grid">
@@ -151,22 +277,61 @@ export default function AdminDashboard() {
             <section className="surface-card analytics-card">
               <div className="section-head-row">
                 <span className="section-eyebrow"><ClockIcon size={13} /> Cross-Account Audit Trail</span>
-                <span className="mono-caption">Latest {logs.length}</span>
+                <span className="mono-caption">
+                  {auditExpanded ? `Page ${auditPage} of ${totalPages} (${auditTotal} total)` : `Showing ${visibleLogs.length} of ${auditTotal}`}
+                </span>
               </div>
-              {logs.length === 0 ? (
-                <p className="muted-caption">No audit events recorded yet.</p>
+
+              {auditLoading ? (
+                <div className="state-box"><div className="spinner" /><p>Loading audit entries...</p></div>
+              ) : visibleLogs.length === 0 ? (
+                <p className="muted-caption">No activity recorded yet.</p>
               ) : (
-                <div className="audit-list">
-                  {logs.map((entry) => (
-                    <div key={entry._id} className="audit-row">
-                      <span className="mono-tag">{entry.action}</span>
-                      <span className="audit-summary">
-                        {entry.user?.email ? `${entry.user.email}: ` : ""}{entry.summary}
-                      </span>
-                      <span className="mono-caption">{fmtDate(entry.createdAt)}</span>
+                <>
+                  <div className="audit-list">
+                    {visibleLogs.map((entry) => (
+                      <div key={entry._id} className="audit-row">
+                        <span className="mono-tag">{ACTION_LABELS[entry.action] || entry.action}</span>
+                        <span className="audit-summary" title={entry.summary}>
+                          {entry.user?.email ? `${entry.user.email}: ` : ""}{entry.summary}
+                        </span>
+                        <span className="mono-caption">{fmtDate(entry.createdAt)}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {auditTotal > 5 && (
+                    <div className="audit-footer-bar">
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={handleToggleAudit}>
+                        {auditExpanded ? "Show less" : `Show more (${auditTotal})`}
+                      </button>
+
+                      {auditExpanded && totalPages > 1 && (
+                        <div className="pagination-controls">
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            disabled={auditPage <= 1 || auditLoading}
+                            onClick={() => loadAuditPage(auditPage - 1)}
+                          >
+                            Previous
+                          </button>
+                          <span className="mono-caption">
+                            Page {auditPage} / {totalPages}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            disabled={auditPage >= totalPages || auditLoading}
+                            onClick={() => loadAuditPage(auditPage + 1)}
+                          >
+                            Next
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  )}
+                </>
               )}
             </section>
           </div>

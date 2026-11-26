@@ -3,23 +3,9 @@ import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { analyticsApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { AlertTriangleIcon, BarChartIcon, ClockIcon, PlusIcon, RefreshIcon } from "../components/Icons";
+import { AlertTriangleIcon, BarChartIcon, PlusIcon, RefreshIcon } from "../components/Icons";
 import { AnimatedNumber, PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
 import { EASE_EDITORIAL } from "../components/motionTokens";
-
-const ACTION_LABELS = {
-  register: "Sign Up", login: "Sign In", login_failed: "Failed Login", logout: "Sign Out",
-  logout_all: "Global Revoke", token_refresh: "Token Refresh", token_reuse_detected: "Security Alert",
-  password_changed: "Password Changed", profile_updated: "Profile Updated", session_revoked: "Session Revoked",
-  upload: "Upload", extract: "Analysis", ask: "Contract Q&A", search: "Library Search",
-  compare: "Comparison", draft_generated: "AI Draft", draft_revised: "Draft Revision",
-  redline_suggested: "Redline", missing_clause_drafted: "Missing Clause",
-  playbook_evaluated: "Playbook Audit", playbook_updated: "Playbook Saved",
-  playbook_rules_generated: "AI Rules", export_report: "Report Export", delete: "Deletion", feedback: "Feedback",
-};
-
-const fmtTime = (ts) =>
-  ts ? new Date(ts).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
 
 export default function Analytics() {
   const { token } = useAuth();
@@ -56,7 +42,6 @@ export default function Analytics() {
   const categories = data?.topCategories || [];
   const missing = data?.missingProtections || [];
   const obligations = data?.portfolioObligations || [];
-  const activity = data?.recentActivity || [];
 
   const totalRisk = dist.high + dist.medium + dist.low;
   const maxCat = Math.max(1, ...categories.map((c) => c.total));
@@ -70,7 +55,7 @@ export default function Analytics() {
       <div className="page-header">
         <div>
           <h1 className="page-heading">Risk &amp; Portfolio Analytics</h1>
-          <p className="page-description">Clause risk distribution, portfolio deadlines, recurring missing protections, Q&amp;A accuracy, and audit trail.</p>
+          <p className="page-description">Overview of clause risks, upcoming deadlines, missing protections, and Q&amp;A quality.</p>
         </div>
         <div className="page-header-actions">
           <button type="button" className="btn btn-secondary" onClick={load} disabled={loading}>
@@ -81,14 +66,14 @@ export default function Analytics() {
       </div>
 
       {loading ? (
-        <div className="surface-card state-box"><div className="spinner" /><p>Aggregating portfolio analytics...</p></div>
+        <div className="surface-card state-box"><div className="spinner" /><p>Loading portfolio analytics...</p></div>
       ) : error ? (
         <div className="alert alert-error">{error}</div>
       ) : portfolio.totalContracts === 0 ? (
         <div className="surface-card empty-box">
           <BarChartIcon size={26} />
           <h3>No analytics data yet</h3>
-          <p>Upload and analyze your first contract to unlock risk charts, deadline tracking, and audit insights.</p>
+          <p>Upload and analyze your first contract to see risk charts, deadlines, and missing protections.</p>
           <Link to="/upload" className="btn btn-primary">Upload Contract</Link>
         </div>
       ) : (
@@ -102,21 +87,25 @@ export default function Analytics() {
               <span className="kpi-sub">Across {portfolio.analyzedContracts} analyzed docs</span>
             </StaggerItem>
             <StaggerItem className="kpi-card">
-              <span className="kpi-label">Classified Clauses</span>
+              <span className="kpi-label">Reviewed Clauses</span>
               <span className="kpi-value"><AnimatedNumber value={portfolio.totalClauses} /></span>
-              <span className="kpi-sub">14-category legal taxonomy</span>
+              <span className="kpi-sub">Across your analyzed contracts</span>
             </StaggerItem>
             <StaggerItem className="kpi-card">
-              <span className="kpi-label">Grounded Q&amp;A Queries</span>
+              <span className="kpi-label">Answered Questions</span>
               <span className="kpi-value">
                 <AnimatedNumber value={qa.groundedCount || 0} /><small className="kpi-unit">/{qa.totalQuestions || 0}</small>
               </span>
-              <span className="kpi-sub">{qa.refusalCount || 0} hallucination refusals</span>
+              <span className="kpi-sub">{qa.refusalCount || 0} declined when not in text</span>
             </StaggerItem>
             <StaggerItem className="kpi-card">
-              <span className="kpi-label">Reviewer Helpfulness</span>
+              <span className="kpi-label">Answer Helpfulness</span>
               <span className="kpi-value">{qa.helpfulnessRate != null ? `${qa.helpfulnessRate}%` : "—"}</span>
-              <span className="kpi-sub">{qa.feedbackUp || 0} helpful · {qa.feedbackDown || 0} flagged</span>
+              <span className="kpi-sub">
+                {(qa.feedbackUp || 0) + (qa.feedbackDown || 0) > 0
+                  ? `${qa.feedbackUp || 0} helpful · ${qa.feedbackDown || 0} flagged`
+                  : "No ratings yet"}
+              </span>
             </StaggerItem>
           </StaggerContainer>
 
@@ -237,48 +226,26 @@ export default function Analytics() {
             </section>
           )}
 
-          <div className="analytics-grid">
-            <section className="surface-card analytics-card">
-              <div className="section-head-row">
-                <span className="section-eyebrow">Recurring Missing Protections</span>
-                <span className="mono-caption">Across analyzed docs</span>
-              </div>
-              {missing.length === 0 ? (
-                <p className="muted-caption">No recurring missing clauses flagged.</p>
-              ) : (
-                <div className="missing-list">
-                  {missing.map((m) => (
-                    <div key={m.clauseType} className="missing-item">
-                      <div className="missing-item-head">
-                        <span className="missing-item-title"><AlertTriangleIcon size={14} /> {m.clauseType}</span>
-                        <span className={`risk-pill risk-${m.severity}`}>Missing in {m.count} {m.count === 1 ? "contract" : "contracts"}</span>
-                      </div>
+          <section className="surface-card analytics-card">
+            <div className="section-head-row">
+              <span className="section-eyebrow">Recurring Missing Protections</span>
+              <span className="mono-caption">Across analyzed docs</span>
+            </div>
+            {missing.length === 0 ? (
+              <p className="muted-caption">No recurring missing clauses flagged.</p>
+            ) : (
+              <div className="missing-list">
+                {missing.map((m) => (
+                  <div key={m.clauseType} className="missing-item">
+                    <div className="missing-item-head">
+                      <span className="missing-item-title"><AlertTriangleIcon size={14} /> {m.clauseType}</span>
+                      <span className={`risk-pill risk-${m.severity}`}>Missing in {m.count} {m.count === 1 ? "contract" : "contracts"}</span>
                     </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section className="surface-card analytics-card">
-              <div className="section-head-row">
-                <span className="section-eyebrow"><ClockIcon size={13} /> Security &amp; Activity Audit Trail</span>
-                <span className="mono-caption">Latest {activity.length}</span>
+                  </div>
+                ))}
               </div>
-              {activity.length === 0 ? (
-                <p className="muted-caption">Activity will appear here as you review contracts.</p>
-              ) : (
-                <div className="audit-list">
-                  {activity.map((e) => (
-                    <div key={e._id} className="audit-row">
-                      <span className="mono-tag">{ACTION_LABELS[e.action] || e.action}</span>
-                      <span className="audit-summary">{e.summary}</span>
-                      <span className="mono-caption">{fmtTime(e.createdAt)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
+            )}
+          </section>
         </>
       )}
     </PageReveal>

@@ -216,7 +216,7 @@ async def health_live():
 
 @app.get("/health/ready", tags=["Health"])
 async def health_ready():
-    s = get_health_status()
+    s = get_health_status(include_vector_count=False)
     if not (s.get("embeddings_ready") and s.get("vector_store_ready")):
         raise HTTPException(status_code=503, detail="AI service dependencies are not ready.")
     return {

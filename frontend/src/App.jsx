@@ -249,8 +249,8 @@ export default function App() {
 
           <footer className="app-footer">
             <div className="app-footer-inner">
-              <span>Legal Contract Agent — Document-grounded contract review workspace</span>
-              <span>Informational first-pass review only · Not legal advice</span>
+              <span>Legal Contract Agent — Clear contract review for individuals and teams</span>
+              <span>For informational review only · Not legal advice</span>
             </div>
           </footer>
 

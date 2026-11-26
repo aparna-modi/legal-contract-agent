@@ -47,7 +47,7 @@ def get_gpu_status() -> Dict[str, Any]:
     return gpu_info
 
 
-def get_health_status() -> Dict[str, Any]:
+def get_health_status(include_vector_count: bool = True) -> Dict[str, Any]:
     """Collect runtime health metrics, active AI providers, and vector index stats."""
     process = psutil.Process(os.getpid())
     process_mem = process.memory_info().rss / (1024 * 1024)
@@ -56,6 +56,22 @@ def get_health_status() -> Dict[str, Any]:
     total_mem_mb = round(sys_mem.total / (1024 * 1024), 1)
     avail_mem_mb = round(sys_mem.available / (1024 * 1024), 1)
     used_mem_mb = round(sys_mem.used / (1024 * 1024), 1)
+
+    if include_vector_count:
+        try:
+            vs_stats = vector_store.stats()
+        except Exception as err:
+            vs_stats = {
+                "provider": vector_store.__class__.__name__,
+                "status": "degraded",
+                "error": str(err),
+            }
+    else:
+        vs_stats = {
+            "provider": vector_store.__class__.__name__,
+            "collection_name": getattr(vector_store, "collection_name", "legal_contracts"),
+            "status": "ready",
+        }
 
     return {
         "status": "healthy",
@@ -88,5 +104,5 @@ def get_health_status() -> Dict[str, Any]:
         "embedding_provider": embedding_service.get_provider_name(),
         "llm_provider": llm_client.get_active_provider(),
         "vector_store_ready": True,
-        "vector_store": vector_store.stats(),
+        "vector_store": vs_stats,
     }

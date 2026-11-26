@@ -75,23 +75,23 @@ export default function Register() {
     <PageReveal className="auth-split">
       <aside className="auth-aside">
         <BrandMark size={32} />
-        <h2 className="auth-aside-title">Build a searchable, private library of your agreements.</h2>
+        <h2 className="auth-aside-title">Keep your agreements organized and easy to understand.</h2>
         <p className="auth-aside-copy">
-          Upload PDFs, Word agreements, or plain text contracts. Extract structured key facts,
-          triage risk drivers, and export counsel-ready reports.
+          Upload PDFs, Word files, or text agreements to get plain-English summaries, key dates,
+          risk highlights, and exportable review notes.
         </p>
         <ul className="auth-checklist">
           <li>
             <CheckCircleIcon size={15} />
-            <span>Executive summaries &amp; key-fact extraction</span>
+            <span>Clear summaries &amp; important dates at a glance</span>
           </li>
           <li>
             <CheckCircleIcon size={15} />
-            <span>Side-by-side redline contract comparison</span>
+            <span>Side-by-side comparison to spot every changed word</span>
           </li>
           <li>
             <CheckCircleIcon size={15} />
-            <span>Cross-contract semantic search (Ctrl+K)</span>
+            <span>Instant search across all your saved contracts (Ctrl+K)</span>
           </li>
         </ul>
       </aside>
@@ -99,7 +99,7 @@ export default function Register() {
       <section className="auth-panel">
         <div className="auth-panel-head">
           <h1>Create account</h1>
-          <p>Provision your isolated contract review workspace in seconds.</p>
+          <p>Set up your personal or team contract workspace in seconds.</p>
         </div>
 
         {error && <div className="alert alert-error">{error}</div>}
@@ -124,13 +124,13 @@ export default function Register() {
 
           <div className="field">
             <label htmlFor="reg-org" className="field-label">
-              Workspace / Organization <span className="field-optional">(optional)</span>
+              Team or Organization <span className="field-optional">(optional)</span>
             </label>
             <input
               id="reg-org"
               type="text"
               className="text-input"
-              placeholder="e.g., Northstar Legal Ops"
+              placeholder="Leave blank for personal use"
               value={organization}
               onChange={(e) => setOrganization(e.target.value)}
               disabled={loading}
@@ -139,13 +139,13 @@ export default function Register() {
 
           <div className="field">
             <label htmlFor="reg-email" className="field-label">
-              Work email
+              Email
             </label>
             <input
               id="reg-email"
               type="email"
               className="text-input"
-              placeholder="counsel@company.com"
+              placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="email"
@@ -197,7 +197,7 @@ export default function Register() {
           </div>
 
           <button type="submit" className="btn btn-primary btn-full" disabled={loading}>
-            {loading ? "Provisioning workspace..." : "Create account"}
+            {loading ? "Creating account..." : "Create account"}
           </button>
         </form>
 

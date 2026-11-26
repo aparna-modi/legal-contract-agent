@@ -4,6 +4,7 @@ const path = require("path");
 const FAILURE_THRESHOLD = Number(process.env.AI_CIRCUIT_THRESHOLD || 3);
 const COOLDOWN_MS = Number(process.env.AI_CIRCUIT_COOLDOWN_MS || 20000);
 const DEFAULT_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 60000);
+const HEALTH_TIMEOUT_MS = Number(process.env.AI_HEALTH_TIMEOUT_MS || 12000);
 const MAX_RETRIES = Number(process.env.AI_MAX_RETRIES || 2);
 
 const MIME_BY_EXT = {
@@ -162,19 +163,32 @@ class AiServicePool {
     });
   }
 
-  async probeHealth() {
+  async probeHealth({ timeoutMs = HEALTH_TIMEOUT_MS } = {}) {
     this._syncNodes();
     return Promise.all(
       this._nodes.map(async (n) => {
         const started = Date.now();
         try {
-          const res = await fetch(`${n.url}/health/ready`, { signal: AbortSignal.timeout(4000) });
+          const res = await fetch(`${n.url}/health/ready`, { signal: AbortSignal.timeout(timeoutMs) });
           const latencyMs = Date.now() - started;
-          if (!res.ok) return { url: n.url, reachable: false, circuitState: n.state, httpStatus: res.status, latencyMs };
+          if (!res.ok) {
+            const waking = [502, 503, 504].includes(res.status);
+            return {
+              url: n.url,
+              reachable: false,
+              status: waking ? "waking" : "unreachable",
+              circuitState: n.state,
+              httpStatus: res.status,
+              latencyMs,
+              error: waking ? `Service waking up (HTTP ${res.status})` : `HTTP ${res.status}`,
+            };
+          }
           const body = await res.json().catch(() => ({}));
+          this._markSuccess(n, latencyMs);
           return {
             url: n.url,
             reachable: true,
+            status: "healthy",
             circuitState: n.state,
             latencyMs,
             avgLatencyMs: n.avgLatencyMs,
@@ -184,7 +198,14 @@ class AiServicePool {
             embeddingProvider: body.embedding_provider || "unknown",
           };
         } catch (err) {
-          return { url: n.url, reachable: false, circuitState: n.state, error: err?.message || "Unreachable" };
+          const isTimeout = err?.name === "TimeoutError" || /timeout|aborted/i.test(err?.message || "");
+          return {
+            url: n.url,
+            reachable: false,
+            status: isTimeout ? "waking" : "unreachable",
+            circuitState: n.state,
+            error: isTimeout ? "Worker is starting up (cold start)" : err?.message || "Unreachable",
+          };
         }
       })
     );

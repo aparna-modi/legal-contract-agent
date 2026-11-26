@@ -314,7 +314,7 @@ export default function DraftContract() {
           <span className="section-eyebrow"><PenToolIcon size={13} /> Contract Drafting Studio</span>
           <h1 className="page-heading">Draft &amp; Refine Commercial Agreements</h1>
           <p className="page-description">
-            Generate section-numbered drafts from 7 templates, refine clauses iteratively with natural-language instructions, fill placeholders inline, and analyze in one click.
+            Create clean contract drafts from 7 templates, ask for edits in plain English, fill blanks inline, and save to your workspace.
           </p>
         </div>
       </div>

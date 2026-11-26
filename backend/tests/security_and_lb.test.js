@@ -273,3 +273,44 @@ test("S3StorageAdapter avoids duplicating bucket name when endpoint already incl
     else process.env.S3_ENDPOINT = prev.S3_ENDPOINT;
   }
 });
+
+test("AiServicePool.probeHealth resets an OPEN circuit to CLOSED once /health/ready responds 200", async () => {
+  let healthy = false;
+  const srv = http.createServer((req, res) => {
+    if (!healthy) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ detail: "booting" }));
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ready", llm_provider: "gemini", embedding_provider: "gemini" }));
+  });
+  await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+
+  const prevUrls = process.env.AI_SERVICE_URLS;
+  process.env.AI_SERVICE_URLS = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    // Trigger 3 failures to open the circuit
+    for (let i = 0; i < 3; i++) {
+      await aiClient.request("/api/v1/test", { timeoutMs: 2000 }).catch(() => {});
+    }
+    assert.equal(aiClient.getPoolStatus().nodes[0].circuitState, "OPEN");
+
+    // Probe while still returning 503 reports waking
+    const waking = await aiClient.probeHealth({ timeoutMs: 2000 });
+    assert.equal(waking[0].reachable, false);
+    assert.equal(waking[0].status, "waking");
+
+    // Once healthy, probeHealth heals the circuit back to CLOSED
+    healthy = true;
+    const recovered = await aiClient.probeHealth({ timeoutMs: 2000 });
+    assert.equal(recovered[0].reachable, true);
+    assert.equal(recovered[0].status, "healthy");
+    assert.equal(recovered[0].circuitState, "CLOSED");
+    assert.equal(aiClient.getPoolStatus().healthyNodes, 1);
+  } finally {
+    if (prevUrls === undefined) delete process.env.AI_SERVICE_URLS;
+    else process.env.AI_SERVICE_URLS = prevUrls;
+    srv.close();
+  }
+});

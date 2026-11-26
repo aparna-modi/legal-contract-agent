@@ -38,23 +38,23 @@ export default function Login() {
     <PageReveal className="auth-split">
       <aside className="auth-aside">
         <BrandMark size={32} />
-        <h2 className="auth-aside-title">Grounded contract review without guesswork.</h2>
+        <h2 className="auth-aside-title">Read every contract with clarity before you sign.</h2>
         <p className="auth-aside-copy">
-          Review clauses, flag commercial risks, redline contract revisions, and query agreements
-          with verifiable page and section citations.
+          Spot risky clauses, compare revisions side by side, and ask plain questions with direct
+          page and section references.
         </p>
         <ul className="auth-checklist">
           <li>
             <CheckCircleIcon size={15} />
-            <span>Private multi-tenant document &amp; vector isolation</span>
+            <span>Your documents stay private to your account</span>
           </li>
           <li>
             <CheckCircleIcon size={15} />
-            <span>Short-lived JWTs with rotating HttpOnly refresh sessions</span>
+            <span>Every answer links straight to the exact page and section</span>
           </li>
           <li>
             <CheckCircleIcon size={15} />
-            <span>Strict refusal when an agreement does not state an answer</span>
+            <span>Honest answers—if a contract doesn&apos;t mention it, we tell you</span>
           </li>
         </ul>
       </aside>
@@ -62,7 +62,7 @@ export default function Login() {
       <section className="auth-panel">
         <div className="auth-panel-head">
           <h1>Sign in</h1>
-          <p>Access your saved contracts, risk analytics, and audit trail.</p>
+          <p>Open your saved contracts, risk notes, and review history.</p>
         </div>
 
         {error && <div className="alert alert-error">{error}</div>}
@@ -70,13 +70,13 @@ export default function Login() {
         <form onSubmit={handleSubmit} className="auth-form">
           <div className="field">
             <label htmlFor="login-email" className="field-label">
-              Work email
+              Email
             </label>
             <input
               id="login-email"
               type="email"
               className="text-input"
-              placeholder="counsel@company.com"
+              placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="email"
@@ -118,14 +118,14 @@ export default function Login() {
           </div>
 
           <button type="submit" className="btn btn-primary btn-full" disabled={loading}>
-            {loading ? "Authenticating..." : "Sign in"}
+            {loading ? "Signing in..." : "Sign in"}
           </button>
         </form>
 
         <p className="auth-switch">
           New to Legal Contract Agent?{" "}
           <Link to="/register" className="inline-link">
-            Create workspace account
+            Create an account
           </Link>
         </p>
       </section>

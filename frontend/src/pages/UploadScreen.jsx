@@ -10,10 +10,10 @@ import { EASE_EDITORIAL } from "../components/motionTokens";
 const ALLOWED_EXT = [".pdf", ".docx", ".txt"];
 const MAX_BYTES = 10 * 1024 * 1024;
 const STEPS = [
-  "Validating file signature & magic bytes",
-  "Uploading contract to secure storage",
-  "Extracting clauses, OCR (if scanned) & scoring risks",
-  "Indexing embeddings into tenant-isolated vector store",
+  "Checking file format",
+  "Uploading your contract",
+  "Reading clauses and flagging risks",
+  "Preparing contract for instant search",
 ];
 
 export default function UploadScreen() {
@@ -24,12 +24,10 @@ export default function UploadScreen() {
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState("");
   const [autoAnalyze, setAutoAnalyze] = useState(true);
-  const [useQueue, setUseQueue] = useState(false);
   const [shareTeam, setShareTeam] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [step, setStep] = useState(0);
   const [percent, setPercent] = useState(0);
-  const [statusMessage, setStatusMessage] = useState("");
   const [uploadedId, setUploadedId] = useState(null);
   const [feedback, setFeedback] = useState(null);
 
@@ -48,27 +46,14 @@ export default function UploadScreen() {
     if (!title.trim()) setTitle(selected.name.replace(/\.[^/.]+$/, ""));
   };
 
-  const pollJob = async (jobId) => {
-    for (let i = 0; i < 90; i++) {
-      await new Promise((r) => setTimeout(r, 1000));
-      const { job } = await contractsApi.jobStatus(token, jobId);
-      setPercent(job.percent || 0);
-      if (job.message) setStatusMessage(job.message);
-      if (job.status === "completed") return job;
-      if (job.status === "failed") throw new Error(job.error || "Background analysis failed.");
-    }
-    throw new Error("Analysis is still running in the background. Open Workspace to check progress.");
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!file) return setFeedback({ tone: "error", text: "Select a contract file first." });
 
     setFeedback(null);
     setUploadedId(null);
-    setStatusMessage("");
     setStep(1);
-    setPercent(10);
+    setPercent(15);
 
     const form = new FormData();
     form.append("contract", file);
@@ -79,15 +64,10 @@ export default function UploadScreen() {
       setStep(2);
       const { document: doc } = await contractsApi.upload(token, form);
       setUploadedId(doc?._id || null);
-      setPercent(30);
+      setPercent(35);
       if (autoAnalyze && doc?._id) {
         setStep(3);
-        if (useQueue) {
-          const { jobId } = await contractsApi.extractAsync(token, doc._id);
-          await pollJob(jobId);
-        } else {
-          await contractsApi.extract(token, doc._id);
-        }
+        await contractsApi.extract(token, doc._id);
         setStep(4);
         setPercent(100);
       }
@@ -160,21 +140,15 @@ export default function UploadScreen() {
             <div className="dropzone-empty">
               <span className="dropzone-icon-wrap"><UploadIcon size={22} /></span>
               <p className="dropzone-title">Drop a contract here, or <span className="inline-link">browse files</span></p>
-              <p className="muted-caption">PDF, DOCX, or TXT up to 10 MB · Magic-byte verified</p>
+              <p className="muted-caption">PDF, DOCX, or TXT up to 10 MB</p>
             </div>
           )}
         </div>
 
         <label className="checkbox-row">
           <input type="checkbox" checked={autoAnalyze} onChange={(e) => setAutoAnalyze(e.target.checked)} disabled={busy} />
-          <span>Run AI clause extraction, risk scoring, summary, and vector indexing immediately</span>
+          <span>Analyze clauses, risks, and summary right after upload</span>
         </label>
-        {autoAnalyze && (
-          <label className="checkbox-row">
-            <input type="checkbox" checked={useQueue} onChange={(e) => setUseQueue(e.target.checked)} disabled={busy} />
-            <span>Process via asynchronous background worker queue (recommended for large PDFs)</span>
-          </label>
-        )}
         {user?.organizationId && (
           <label className="checkbox-row">
             <input type="checkbox" checked={shareTeam} onChange={(e) => setShareTeam(e.target.checked)} disabled={busy} />
@@ -207,13 +181,12 @@ export default function UploadScreen() {
                 </div>
               );
             })}
-            {statusMessage && <span className="mono-caption" style={{ marginTop: 4 }}>{statusMessage}</span>}
           </div>
         )}
 
         <div className="upload-security-note">
           <LockIcon size={14} />
-          <span>Files are magic-byte validated and scoped strictly to your tenant ID and vector index.</span>
+          <span>Your uploaded files stay private to your account unless you choose to share them with your team.</span>
         </div>
 
         <div className="form-footer-row">

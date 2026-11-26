@@ -465,9 +465,12 @@ export default function ContractDrawer({
   const rateAnswer = async (qaId, rating) => {
     if (!qaId || feedbackBusy[qaId]) return;
     setFeedbackBusy((p) => ({ ...p, [qaId]: true }));
+    setQaError(null);
     try {
       await feedbackApi.submit(token, { qaId, rating });
       setFeedbackMap((p) => ({ ...p, [qaId]: rating }));
+    } catch (err) {
+      setQaError(err.message || "Could not save your rating.");
     } finally {
       setFeedbackBusy((p) => ({ ...p, [qaId]: false }));
     }
@@ -531,7 +534,7 @@ export default function ContractDrawer({
               {contract.ocrUsed && <span className="mono-tag">OCR</span>}
               {contract.visibility === "team" && <span className="mono-tag">TEAM</span>}
               <span className={`risk-pill risk-${overall}`}>{overall.toUpperCase()} RISK · {riskScore}/100</span>
-              <span className="drawer-meta-sep">{totalPages}p · {(contract.totalTokens || 0).toLocaleString()} tok</span>
+              <span className="drawer-meta-sep">{totalPages} {totalPages === 1 ? "page" : "pages"}</span>
             </div>
             <h2 className="drawer-title">{contract.title || contract.fileName}</h2>
             <p className="drawer-filename">{contract.fileName}</p>
@@ -1133,7 +1136,7 @@ export default function ContractDrawer({
             {tab === "qa" && (
               <FadePanel panelKey="qa" className="chat-workspace">
                 <p className="legal-disclaimer">
-                  Multi-turn Q&amp;A grounded strictly in your uploaded contract (retains up to 6 prior turns). Informational review only — not legal advice.
+                  Answers are based strictly on this contract and remember your recent follow-up questions. For informational review only — not legal advice.
                 </p>
 
                 <div className="chat-thread">
@@ -1315,9 +1318,9 @@ export default function ContractDrawer({
                 <section className="panel-section">
                   <div className="section-head-row">
                     <div>
-                      <span className="section-eyebrow">Hybrid AI + Rule Playbook Compliance Audit</span>
+                      <span className="section-eyebrow">Playbook Compliance Check</span>
                       <p className="muted-caption">
-                        Audit this agreement against your active firm playbook or test against a jurisdiction standard pack.
+                        Check this agreement against your saved playbook or a standard jurisdiction rule pack.
                       </p>
                     </div>
                   </div>
