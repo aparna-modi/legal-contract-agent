@@ -115,7 +115,7 @@ textarea {
 }
 
 .topbar-left {
-  gap: 20px;
+  gap: 16px;
   min-width: 0;
 }
 
@@ -126,22 +126,23 @@ textarea {
 }
 
 .nav-tabs {
-  gap: 3px;
+  gap: 2px;
   flex-shrink: 0;
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   text-decoration: none;
   flex-shrink: 0;
   white-space: nowrap;
+  min-width: max-content;
 }
 
 .brand-name {
   font-weight: 600;
-  font-size: 15px;
+  font-size: 14.5px;
   letter-spacing: -0.015em;
   color: var(--ink-primary);
   white-space: nowrap;
@@ -156,9 +157,9 @@ textarea {
   position: relative;
   text-decoration: none;
   color: var(--ink-secondary);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 500;
-  padding: 6px 10px;
+  padding: 6px 8px;
   border-radius: var(--radius-sm);
   transition: color 0.16s ease;
   white-space: nowrap;
@@ -3829,7 +3830,7 @@ textarea {
 }
 
 /* Responsive */
-@media (max-width: 1180px) {
+@media (max-width: 1240px) {
   .cmd-trigger-btn span,
   .cmd-trigger-btn kbd {
     display: none;
@@ -3838,10 +3839,10 @@ textarea {
     padding: 6px 8px;
   }
   .account-name {
-    max-width: 96px;
+    max-width: 92px;
   }
   .topbar-left {
-    gap: 14px;
+    gap: 12px;
   }
 }
 
