@@ -16,7 +16,7 @@
   --bg-hover: #faf9f5;
   --bg-input: #ffffff;
   --bg-inset: #f9f8f4;
-  --nav-bg: rgba(255, 255, 255, 0.9);
+  --nav-bg: #ffffff;
   --backdrop-bg: rgba(20, 24, 31, 0.44);
   --skeleton-shine: #e9e6dd;
 
@@ -130,7 +130,7 @@
   --bg-hover: #252421;
   --bg-input: #141413;
   --bg-inset: #1e1d1b;
-  --nav-bg: rgba(17, 17, 16, 0.88);
+  --nav-bg: #191918;
   --backdrop-bg: rgba(0, 0, 0, 0.72);
   --skeleton-shine: #2d2c28;
 

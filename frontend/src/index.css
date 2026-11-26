@@ -85,12 +85,10 @@ textarea {
 
 .topbar {
   background: var(--nav-bg);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 40;
+  z-index: 50;
 }
 
 .topbar-inner {
