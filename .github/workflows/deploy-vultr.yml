@@ -1,0 +1,43 @@
+name: Deploy to Vultr VPS
+
+on:
+  workflow_dispatch:
+  # Uncomment below after adding VULTR_HOST, VULTR_USER, and VULTR_SSH_KEY secrets to GitHub
+  # push:
+  #   branches: [main]
+
+concurrency:
+  group: vultr-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: SSH Deploy to Vultr
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Verify Vultr SSH secrets are configured
+        run: |
+          if [ -z "${{ secrets.VULTR_HOST }}" ] || [ -z "${{ secrets.VULTR_USER }}" ] || [ -z "${{ secrets.VULTR_SSH_KEY }}" ]; then
+            echo "Missing one or more required GitHub repository secrets: VULTR_HOST, VULTR_USER, VULTR_SSH_KEY"
+            exit 1
+          fi
+
+      - name: Deploy over SSH
+        env:
+          VULTR_HOST: ${{ secrets.VULTR_HOST }}
+          VULTR_USER: ${{ secrets.VULTR_USER }}
+          VULTR_PORT: ${{ secrets.VULTR_PORT || '22' }}
+          VULTR_APP_DIR: ${{ secrets.VULTR_APP_DIR || '/opt/legal-contract-agent' }}
+          VULTR_SSH_KEY: ${{ secrets.VULTR_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VULTR_SSH_KEY" > ~/.ssh/vultr_deploy_key
+          chmod 600 ~/.ssh/vultr_deploy_key
+          ssh-keyscan -p "$VULTR_PORT" -H "$VULTR_HOST" >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/vultr_deploy_key -p "$VULTR_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "${VULTR_USER}@${VULTR_HOST}" \
+            "cd '${VULTR_APP_DIR}' && bash infra/vultr/deploy.sh"

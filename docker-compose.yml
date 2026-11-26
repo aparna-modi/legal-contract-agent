@@ -125,9 +125,10 @@ services:
 networks:
   edge_net:
     driver: bridge
+  # Non-published private bridge network: services on internal_net have no host ports
+  # exposed publicly, while ai-service retains outbound HTTPS access for Gemini & Qdrant Cloud.
   internal_net:
     driver: bridge
-    internal: true
 
 volumes:
   chroma_data:

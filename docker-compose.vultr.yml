@@ -1,0 +1,239 @@
+# Production Docker Compose Stack for Vultr Cloud Compute (Ubuntu 24.04 LTS)
+# Hosts the complete stack on a single Vultr VPS:
+#   - Caddy (automatic Let's Encrypt HTTPS on ports 80/443 + load balancer + SSE streaming)
+#   - Frontend (React 19 + Vite static SPA, same-origin /api/* calls)
+#   - Backend x2 (Express API gateways behind ip_hash load balancing with failover)
+#   - AI Service (FastAPI + Google Gemini + Qdrant/Chroma vector store; never publicly exposed)
+#   - Redis (shared rate limiting & caching across backend replicas)
+#   - Optional profiles:
+#       --profile selfhosted-qdrant  (run Qdrant vector DB locally on Vultr)
+#       --profile selfhosted-mongo   (run MongoDB 7 locally on Vultr instead of Atlas)
+#
+# Usage:
+#   docker compose -f docker-compose.vultr.yml --env-file .env.vultr up -d --build
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  environment:
+    NODE_ENV: production
+    PORT: "5000"
+    TRUST_PROXY: ${TRUST_PROXY:-1}
+    MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI in .env.vultr}
+    JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET (min 32 chars) in .env.vultr}
+    JWT_ACCESS_EXPIRES: ${JWT_ACCESS_EXPIRES:-15m}
+    REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-7}
+    INTERNAL_API_KEY: ${INTERNAL_API_KEY:?Set INTERNAL_API_KEY in .env.vultr}
+    AI_SERVICE_URLS: http://ai-service:8000
+    REDIS_URL: redis://redis:6379
+    CORS_ORIGINS: ${CORS_ORIGINS:-https://${APP_DOMAIN:?Set APP_DOMAIN in .env.vultr}}
+    APP_URL: ${APP_URL:-https://${APP_DOMAIN:?Set APP_DOMAIN in .env.vultr}}
+    FRONTEND_URL: ${FRONTEND_URL:-https://${APP_DOMAIN:?Set APP_DOMAIN in .env.vultr}}
+    COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+    STORAGE_PROVIDER: ${STORAGE_PROVIDER:-gridfs}
+    S3_BUCKET: ${S3_BUCKET:-}
+    S3_REGION: ${S3_REGION:-us-east-1}
+    S3_ENDPOINT: ${S3_ENDPOINT:-}
+    S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+    S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+    S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+    PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-}
+    RESEND_API_KEY: ${RESEND_API_KEY:-}
+    EMAIL_FROM: ${EMAIL_FROM:-}
+    SENTRY_DSN: ${SENTRY_DSN:-}
+    AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-120000}
+    AI_WAKEUP_TIMEOUT_MS: ${AI_WAKEUP_TIMEOUT_MS:-0}
+    ENABLE_KEEP_ALIVE: "false"
+  volumes:
+    - contract_uploads:/app/uploads
+  depends_on:
+    redis:
+      condition: service_healthy
+    ai-service:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/health/live || exit 1"]
+    interval: 20s
+    timeout: 5s
+    start_period: 20s
+    retries: 3
+  networks:
+    - edge_net
+    - internal_net
+  mem_limit: 512m
+  logging: *default-logging
+  restart: unless-stopped
+
+services:
+  # Shared Redis for distributed rate limiting & caching across backend replicas
+  redis:
+    image: redis:7-alpine
+    container_name: lca-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - internal_net
+    mem_limit: 192m
+    logging: *default-logging
+    restart: unless-stopped
+
+  # Optional self-hosted Qdrant vector DB (--profile selfhosted-qdrant)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: lca-qdrant
+    profiles: ["selfhosted-qdrant"]
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && printf \"GET /readyz HTTP/1.0\\r\\n\\r\\n\" >&3 && head -n 1 <&3 | grep -q 200'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal_net
+    mem_limit: 512m
+    logging: *default-logging
+    restart: unless-stopped
+
+  # Optional self-hosted MongoDB 7 (--profile selfhosted-mongo)
+  mongo:
+    image: mongo:7
+    container_name: lca-mongo
+    profiles: ["selfhosted-mongo"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-lca_admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-change_me_before_using_selfhosted_mongo}
+      MONGO_INITDB_DATABASE: legal-contract-agent
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    networks:
+      - internal_net
+    mem_limit: 768m
+    logging: *default-logging
+    restart: unless-stopped
+
+  # Private AI microservice (no public ports; retains outbound HTTPS for Gemini & Qdrant Cloud)
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: lca-ai-service
+    environment:
+      APP_ENV: production
+      PORT: "8000"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_LLM_MODEL: ${GEMINI_LLM_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?Set INTERNAL_API_KEY in .env.vultr}
+      VECTOR_STORE_PROVIDER: ${VECTOR_STORE_PROVIDER:-qdrant}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      CORS_ORIGINS: http://backend-1:5000,http://backend-2:5000
+    volumes:
+      - chroma_data:/app/chroma_db
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5)\""]
+      interval: 15s
+      timeout: 8s
+      start_period: 25s
+      retries: 5
+    networks:
+      - internal_net
+    mem_limit: 1024m
+    logging: *default-logging
+    restart: unless-stopped
+
+  # Load-balanced Express API Gateway replicas
+  backend-1:
+    <<: *backend-common
+    container_name: lca-backend-1
+
+  backend-2:
+    <<: *backend-common
+    container_name: lca-backend-2
+
+  # Static React 19 SPA built for same-origin /api/* requests
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+    container_name: lca-frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks:
+      - edge_net
+    mem_limit: 128m
+    logging: *default-logging
+    restart: unless-stopped
+
+  # Public HTTPS Edge Proxy & Load Balancer (automatic Let's Encrypt TLS)
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: lca-edge-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in .env.vultr}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env.vultr}
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend-1:
+        condition: service_healthy
+      backend-2:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/lb-health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - edge_net
+    mem_limit: 192m
+    logging: *default-logging
+    restart: unless-stopped
+
+networks:
+  edge_net:
+    driver: bridge
+  internal_net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+  redis_data:
+  chroma_data:
+  qdrant_data:
+  mongo_data:
+  contract_uploads:

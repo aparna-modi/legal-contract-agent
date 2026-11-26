@@ -25,7 +25,7 @@ const app = express();
 const isProd = process.env.NODE_ENV === "production";
 
 app.disable("x-powered-by");
-app.set("trust proxy", 1);
+app.set("trust proxy", Number(process.env.TRUST_PROXY || 1));
 
 app.use(requestContext);
 
