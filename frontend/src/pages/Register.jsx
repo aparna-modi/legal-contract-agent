@@ -75,10 +75,10 @@ export default function Register() {
     <PageReveal className="auth-split">
       <aside className="auth-aside">
         <BrandMark size={32} />
-        <h2 className="auth-aside-title">Keep your agreements organized and easy to understand.</h2>
+        <h2 className="auth-aside-title">Review, harden, and negotiate agreements with precision.</h2>
         <p className="auth-aside-copy">
-          Upload PDFs, Word files, or text agreements to get plain-English summaries, key dates,
-          risk highlights, and exportable review notes.
+          Upload PDFs, Word documents, or text contracts for executive legal briefings, loophole audits,
+          protective rewrites, deadline calendars, and exportable counsel reports.
         </p>
         <ul className="auth-checklist">
           <li>

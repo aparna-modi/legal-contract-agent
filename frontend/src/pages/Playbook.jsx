@@ -11,6 +11,10 @@ const RULE_LABELS = {
   min_notice_days: "Minimum Notice Period (Days)",
   allowed_jurisdiction: "Allowed Governing Law",
   max_high_risk: "Max High-Risk Clauses",
+  require_defined_term: "Require Defined Term",
+  forbid_unilateral_amendment: "Forbid Unilateral Amendment",
+  require_cure_period_days: "Minimum Cure Period (Days)",
+  max_liability_cap_months: "Max Liability Cap (Months)",
 };
 
 const EMPTY_RULE = { name: "", ruleType: "require_clause", target: "", severity: "high", guidance: "" };
@@ -137,7 +141,7 @@ export default function Playbook() {
       <div className="page-header">
         <div>
           <h1 className="page-heading">Legal Playbook &amp; Compliance</h1>
-          <p className="page-description">Pick a standard rule pack or write your own review rules in plain English, then check any contract against them.</p>
+          <p className="page-description">Load a jurisdictional standard pack or codify internal review policies into enforceable compliance checks for every contract.</p>
         </div>
       </div>
 
@@ -212,7 +216,7 @@ export default function Playbook() {
                         ? <CheckCircleIcon size={15} className="text-accent" />
                         : <AlertTriangleIcon size={15} className={r.status === "fail" ? "text-danger" : "text-warn"} />}
                       <strong>{r.name}</strong>
-                      {r.aiVerified && <span className="mono-tag">AI Verified</span>}
+                      {r.aiVerified && <span className="mono-tag">Counsel Verified</span>}
                     </div>
                     <span className="muted-caption">{r.detail}</span>
                     {r.status !== "pass" && r.remediation && (
@@ -227,7 +231,7 @@ export default function Playbook() {
                 </div>
               ))}
             </div>
-            <p className="legal-disclaimer">Automated playbook checks flag potential rule deviations for review — not legal advice.</p>
+            <p className="legal-disclaimer">Playbook compliance checks flag policy deviations for counsel review prior to execution.</p>
           </div>
         )}
       </section>
@@ -235,8 +239,8 @@ export default function Playbook() {
       <section className="surface-card settings-card">
         <div className="section-head-row">
           <div>
-            <span className="section-eyebrow"><ScaleIcon size={14} /> Generate Rules from Policy Text</span>
-            <p className="muted-caption">Paste internal procurement or legal guidelines in plain English to create structured playbook checks automatically.</p>
+            <span className="section-eyebrow"><ScaleIcon size={14} /> Compile Rules from Policy Guidelines</span>
+            <p className="muted-caption">Paste internal procurement or legal review standards to compile structured compliance checks automatically.</p>
           </div>
         </div>
         <form onSubmit={handleGenerateRules} className="settings-form">
@@ -370,7 +374,7 @@ export default function Playbook() {
           </div>
           <div className="field">
             <label htmlFor="rule-guidance" className="field-label">
-              Negotiation fallback guidance <span className="field-optional">(used by AI redline generator)</span>
+              Negotiation fallback guidance <span className="field-optional">(applied when drafting counter-redlines)</span>
             </label>
             <input id="rule-guidance" className="text-input" placeholder="e.g., Propose mutual Delaware jurisdiction or neutral arbitration." value={draft.guidance} onChange={(e) => setDraft((d) => ({ ...d, guidance: e.target.value }))} />
           </div>

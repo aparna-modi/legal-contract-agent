@@ -25,7 +25,7 @@ const ResetPassword = lazy(() => import("./pages/ResetPassword"));
 const NAV_LINKS = [
   { to: "/", label: "Workspace", end: true },
   { to: "/upload", label: "Upload" },
-  { to: "/draft", label: "Draft" },
+  { to: "/draft", label: "Drafting" },
   { to: "/compare", label: "Compare" },
   { to: "/playbook", label: "Playbook" },
   { to: "/analytics", label: "Analytics" },
@@ -68,16 +68,23 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [isAuthenticated]);
 
-  // Proactively warm up the backend and AI service when signed in and keep them active while the tab is open.
+  // Proactively keep the backend and counsel analysis service warm while the workspace is active.
   useEffect(() => {
     if (!isAuthenticated || !token) return undefined;
     const ping = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       systemApi.warmup(token).catch(() => {});
     };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") ping();
+    };
     ping();
-    const timer = window.setInterval(ping, 8 * 60 * 1000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(ping, 4 * 60 * 1000);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [isAuthenticated, token]);
 
   const initials = (user?.name || "U")
@@ -262,8 +269,8 @@ export default function App() {
 
           <footer className="app-footer">
             <div className="app-footer-inner">
-              <span>Legal Contract Agent — Clear contract review for individuals and teams</span>
-              <span>For informational review only · Not legal advice</span>
+              <span>Legal Contract Agent — Commercial Contract Review, Drafting &amp; Counsel Strategy</span>
+              <span>Confidential workspace · Obtain licensed counsel review before execution</span>
             </div>
           </footer>
 

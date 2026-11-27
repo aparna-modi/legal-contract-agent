@@ -48,9 +48,11 @@ x-backend-common: &backend-common
     RESEND_API_KEY: ${RESEND_API_KEY:-}
     EMAIL_FROM: ${EMAIL_FROM:-}
     SENTRY_DSN: ${SENTRY_DSN:-}
-    AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-120000}
+    AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-170000}
     AI_WAKEUP_TIMEOUT_MS: ${AI_WAKEUP_TIMEOUT_MS:-0}
-    ENABLE_KEEP_ALIVE: "false"
+    ENABLE_KEEP_ALIVE: ${ENABLE_KEEP_ALIVE:-true}
+    KEEP_ALIVE_INTERVAL_MS: ${KEEP_ALIVE_INTERVAL_MS:-240000}
+    PUBLIC_BACKEND_URL: ${PUBLIC_BACKEND_URL:-https://${APP_DOMAIN:?Set APP_DOMAIN in .env.vultr}}
   volumes:
     - contract_uploads:/app/uploads
   depends_on:
@@ -221,7 +223,38 @@ services:
       - edge_net
     mem_limit: 192m
     logging: *default-logging
-    restart: unless-stopped
+    restart: always
+
+  # Lightweight 24/7 keep-alive watchdog keeping frontend, API replicas, AI worker, and HTTPS edge active
+  keepalive:
+    image: alpine:3.20
+    container_name: lca-keepalive
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "[keepalive] Watchdog started (interval=${KEEPALIVE_SECONDS:-240}s)"
+        while true; do
+          wget -qO- --timeout=10 http://frontend:80/ >/dev/null 2>&1 || echo "[keepalive] frontend ping failed"
+          wget -qO- --timeout=10 http://backend-1:5000/health/ready >/dev/null 2>&1 || echo "[keepalive] backend-1 ping failed"
+          wget -qO- --timeout=10 http://backend-2:5000/health/ready >/dev/null 2>&1 || echo "[keepalive] backend-2 ping failed"
+          wget -qO- --timeout=15 http://ai-service:8000/health/ready >/dev/null 2>&1 || echo "[keepalive] ai-service ping failed"
+          wget -qO- --timeout=10 http://caddy:8080/lb-health >/dev/null 2>&1 || echo "[keepalive] caddy ping failed"
+          sleep "${KEEPALIVE_SECONDS:-240}"
+        done
+    environment:
+      KEEPALIVE_SECONDS: ${KEEPALIVE_SECONDS:-240}
+    depends_on:
+      caddy:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    networks:
+      - edge_net
+      - internal_net
+    mem_limit: 32m
+    logging: *default-logging
+    restart: always
 
 networks:
   edge_net:

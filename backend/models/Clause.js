@@ -43,6 +43,15 @@ const clauseSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    ipcBnsRef: {
+      type: String,
+      default: "",
+    },
+    favorability: {
+      type: String,
+      enum: ["favors_user", "neutral", "favors_counterparty"],
+      default: "neutral",
+    },
   },
   {
     timestamps: true,

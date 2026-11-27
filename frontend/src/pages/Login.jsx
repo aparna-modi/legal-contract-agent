@@ -38,10 +38,10 @@ export default function Login() {
     <PageReveal className="auth-split">
       <aside className="auth-aside">
         <BrandMark size={32} />
-        <h2 className="auth-aside-title">Read every contract with clarity before you sign.</h2>
+        <h2 className="auth-aside-title">Review every contract with clarity before execution.</h2>
         <p className="auth-aside-copy">
-          Spot risky clauses, compare revisions side by side, and ask plain questions with direct
-          page and section references.
+          Audit drafting loopholes, compare revisions word by word, map statutory exposure, and query
+          clauses with direct page and section citations.
         </p>
         <ul className="auth-checklist">
           <li>

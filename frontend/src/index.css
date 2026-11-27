@@ -1259,26 +1259,33 @@ textarea {
 
 .drawer-tabs {
   display: flex;
-  gap: 4px;
-  padding: 0 24px;
+  gap: 2px;
+  padding: 0 20px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-hover);
   overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.drawer-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .drawer-tab {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 11px 14px;
+  gap: 6px;
+  padding: 10px 11px;
   border: none;
   background: transparent;
   color: var(--ink-secondary);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
   transition: color 0.16s ease;
 }
 
@@ -3827,6 +3834,117 @@ textarea {
   gap: 8px;
 }
 
+/* Counsel Suite v3 Panels & Scorecards */
+.scorecard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 10px;
+}
+
+.scorecard-cell {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.scorecard-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+}
+
+.perspective-bar,
+.neg-email-bar,
+.version-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+}
+
+.compare-mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.upload-perspective-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.live-stage-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink-secondary);
+  margin-bottom: 6px;
+}
+
+.checklist-compact {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 7px 14px;
+  margin-top: 8px;
+}
+
+.checklist-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--ink-secondary);
+}
+
+.chip-btn.chip-active {
+  background: var(--brand);
+  color: var(--brand-ink);
+  border-color: var(--brand);
+}
+
+.law-ref-penal {
+  background: var(--risk-high-bg);
+  color: var(--risk-high);
+  border-color: var(--risk-high-border);
+}
+
+.badge-grade {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-subtle);
+  color: var(--ink-primary);
+}
+
+.border-risk-high {
+  border-left: 3px solid var(--risk-high-solid);
+}
+
+.border-risk-medium {
+  border-left: 3px solid var(--risk-med-solid);
+}
+
+.border-risk-low {
+  border-left: 3px solid var(--risk-low-solid);
+}
+
 /* Responsive */
 @media (max-width: 1240px) {
   .cmd-trigger-btn span,
@@ -3880,7 +3998,8 @@ textarea {
   .settings-grid,
   .compare-picker-grid,
   .draft-notes-grid,
-  .draft-two-col {
+  .draft-two-col,
+  .upload-perspective-grid {
     grid-template-columns: 1fr;
   }
   .swap-btn {

@@ -16,7 +16,7 @@ router.get("/overview", protect, async (req, res) => {
       ? { $or: [{ user: userId }, { organization: req.user.organizationId, visibility: "team" }] }
       : { user: userId };
     const [docs, qaList, fbRows, recentActivity] = await Promise.all([
-      DocumentModel.find(docFilter).select("title fileName status riskSummary missingClauses keyFacts totalTokens pageCount createdAt").lean(),
+      DocumentModel.find(docFilter).select("title fileName status riskSummary scorecard loopholes missingClauses keyFacts totalTokens pageCount createdAt").lean(),
       QuestionAnswerModel.find({ user: userId }).select("insufficientInformation confidence latencyMs").lean(),
       FeedbackModel.aggregate([{ $match: { user: userId } }, { $group: { _id: "$rating", count: { $sum: 1 } } }]),
       AuditLogModel.find({ user: userId }).sort({ createdAt: -1 }).limit(12).select("action resourceType resourceId summary createdAt").lean(),
@@ -30,6 +30,31 @@ router.get("/overview", protect, async (req, res) => {
     const avgRiskScore = analyzed.length
       ? Math.round(analyzed.reduce((s, d) => s + (d.riskSummary?.score || 0), 0) / analyzed.length)
       : 0;
+    const avgHealthScore = analyzed.length
+      ? Math.round(
+          analyzed.reduce((s, d) => s + (d.scorecard?.overallHealth || Math.max(0, 100 - (d.riskSummary?.score || 0))), 0) / analyzed.length
+        )
+      : 0;
+    const avgLoopholeScore = analyzed.length
+      ? Math.round(analyzed.reduce((s, d) => s + (d.scorecard?.loopholeScore ?? 80), 0) / analyzed.length)
+      : 0;
+    const avgUserFavorability = analyzed.length
+      ? Math.round(analyzed.reduce((s, d) => s + (d.scorecard?.userFavorability ?? 60), 0) / analyzed.length)
+      : 0;
+
+    const loopholeCatMap = new Map();
+    let totalLoopholes = 0;
+    for (const doc of analyzed) {
+      for (const lp of doc.loopholes || []) {
+        totalLoopholes += 1;
+        const cat = lp.category || "ambiguous_standard";
+        loopholeCatMap.set(cat, (loopholeCatMap.get(cat) || 0) + 1);
+      }
+    }
+    const topLoopholeCategories = [...loopholeCatMap.entries()]
+      .map(([category, count]) => ({ category, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
 
     const riskDistribution = { high: 0, medium: 0, low: 0 };
     const catMap = new Map();
@@ -85,10 +110,15 @@ router.get("/overview", protect, async (req, res) => {
         analyzedContracts: analyzed.length,
         pendingContracts: docs.length - analyzed.length,
         avgRiskScore,
+        avgHealthScore,
+        avgLoopholeScore,
+        avgUserFavorability,
+        totalLoopholes,
         totalClauses: clauses.length,
       },
       riskDistribution,
       topCategories,
+      topLoopholeCategories,
       missingProtections,
       portfolioObligations: portfolioObligations.slice(0, 16),
       qaMetrics: {

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { contractsApi } from "../api/client";
@@ -10,26 +10,46 @@ import { EASE_EDITORIAL } from "../components/motionTokens";
 const ALLOWED_EXT = [".pdf", ".docx", ".txt"];
 const MAX_BYTES = 10 * 1024 * 1024;
 const STEPS = [
-  "Checking file format",
-  "Uploading your contract",
-  "Reading clauses and flagging risks",
-  "Preparing contract for instant search",
+  "Validating document format",
+  "Uploading contract securely",
+  "Extracting clauses, loopholes & statutory exposure",
+  "Indexing sections for citation-backed search",
+];
+
+const ROLE_OPTIONS = [
+  { value: "", label: "Auto-detect / General Review" },
+  { value: "client_buyer", label: "Client / Buyer / Customer" },
+  { value: "vendor_seller", label: "Vendor / Service Provider / Seller" },
+  { value: "employee", label: "Employee / Executive" },
+  { value: "employer", label: "Employer / Company" },
+  { value: "tenant", label: "Tenant / Lessee" },
+  { value: "landlord", label: "Landlord / Lessor" },
+  { value: "contractor", label: "Independent Contractor / Consultant" },
+  { value: "founder_investor", label: "Founder / Shareholder / Licensor" },
 ];
 
 export default function UploadScreen() {
   const { token, user } = useAuth();
   const navigate = useNavigate();
   const inputRef = useRef(null);
+  const pollTimerRef = useRef(null);
 
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState("");
+  const [userPartyName, setUserPartyName] = useState("");
+  const [userRole, setUserRole] = useState("");
   const [autoAnalyze, setAutoAnalyze] = useState(true);
   const [shareTeam, setShareTeam] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [step, setStep] = useState(0);
   const [percent, setPercent] = useState(0);
+  const [stageMessage, setStageMessage] = useState("");
   const [uploadedId, setUploadedId] = useState(null);
   const [feedback, setFeedback] = useState(null);
+
+  useEffect(() => () => {
+    if (pollTimerRef.current) window.clearTimeout(pollTimerRef.current);
+  }, []);
 
   const selectFile = (selected) => {
     if (!selected) return;
@@ -46,37 +66,93 @@ export default function UploadScreen() {
     if (!title.trim()) setTitle(selected.name.replace(/\.[^/.]+$/, ""));
   };
 
+  const pollExtractionJob = (jobId) => new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = async () => {
+      try {
+        const res = await contractsApi.jobStatus(token, jobId);
+        const job = res?.job || res;
+        const pct = Number(job?.percent || 0);
+        if (pct > 0) setPercent(Math.max(35, Math.min(98, pct)));
+        if (job?.message) setStageMessage(job.message);
+        if (pct >= 80) setStep(4);
+
+        if (job?.status === "completed") {
+          setStep(4);
+          setPercent(100);
+          setStageMessage("Analysis complete.");
+          return resolve(job);
+        }
+        if (job?.status === "failed") {
+          return reject(new Error(job?.error || "Contract extraction failed."));
+        }
+        if (Date.now() - started > 180000) {
+          return reject(new Error("Extraction is taking longer than expected. Open Workspace to track completion."));
+        }
+        pollTimerRef.current = window.setTimeout(tick, 900);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    tick();
+  });
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!file) return setFeedback({ tone: "error", text: "Select a contract file first." });
 
     setFeedback(null);
     setUploadedId(null);
+    setStageMessage("Checking document format...");
     setStep(1);
-    setPercent(15);
+    setPercent(12);
 
     const form = new FormData();
     form.append("contract", file);
     if (title.trim()) form.append("title", title.trim());
+    if (userPartyName.trim()) form.append("userPartyName", userPartyName.trim());
+    if (userRole) form.append("userRole", userRole);
     if (shareTeam && user?.organizationId) form.append("visibility", "team");
 
     try {
       setStep(2);
+      setStageMessage("Uploading document to your private workspace...");
       const { document: doc } = await contractsApi.upload(token, form);
       setUploadedId(doc?._id || null);
-      setPercent(35);
+      setPercent(32);
+
       if (autoAnalyze && doc?._id) {
         setStep(3);
-        await contractsApi.extract(token, doc._id);
+        setStageMessage("Queueing clause extraction, loophole audit, and statutory mapping...");
+        let asyncHandled = false;
+        try {
+          const queued = await contractsApi.extractAsync(token, doc._id);
+          const jobId = queued?.jobId || queued?.job?.id;
+          if (jobId) {
+            asyncHandled = true;
+            await pollExtractionJob(jobId);
+          }
+        } catch {
+          // Fall back to synchronous extraction if async worker queue is unavailable
+        }
+        if (!asyncHandled) {
+          setStageMessage("Running full clause extraction and risk audit...");
+          await contractsApi.extract(token, doc._id);
+          setStep(4);
+          setPercent(100);
+        }
+      } else {
         setStep(4);
         setPercent(100);
       }
+
       setFeedback({ tone: "success", text: `"${doc.title}" ${autoAnalyze ? "uploaded and analyzed" : "uploaded"}. Opening workspace...` });
       setTimeout(() => navigate("/"), 700);
     } catch (err) {
       setFeedback({ tone: "error", text: err.message });
       setStep(0);
       setPercent(0);
+      setStageMessage("");
     }
   };
 
@@ -87,7 +163,7 @@ export default function UploadScreen() {
       <div className="page-header">
         <div>
           <h1 className="page-heading">Upload Contract</h1>
-          <p className="page-description">Submit a PDF (including scanned agreements via OCR), DOCX, or TXT file for clause extraction and risk review.</p>
+          <p className="page-description">Submit a PDF (including scanned agreements via OCR), DOCX, or TXT file for clause extraction, loophole auditing, and statutory risk review.</p>
         </div>
       </div>
 
@@ -106,6 +182,19 @@ export default function UploadScreen() {
         <div className="field">
           <label htmlFor="contract-title" className="field-label">Contract Title <span className="field-optional">(optional)</span></label>
           <input id="contract-title" className="text-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g., Master Services Agreement — Northstar LLC" disabled={busy} />
+        </div>
+
+        <div className="upload-perspective-grid">
+          <div className="field">
+            <label htmlFor="user-role" className="field-label">Side You Represent <span className="field-optional">(tailors protection score)</span></label>
+            <select id="user-role" className="select-input" value={userRole} onChange={(e) => setUserRole(e.target.value)} disabled={busy}>
+              {ROLE_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="user-party" className="field-label">Your Entity / Party Name <span className="field-optional">(optional)</span></label>
+            <input id="user-party" className="text-input" value={userPartyName} onChange={(e) => setUserPartyName(e.target.value)} placeholder="e.g., Kaveri FinTech Pvt. Ltd." disabled={busy} />
+          </div>
         </div>
 
         <div
@@ -147,7 +236,7 @@ export default function UploadScreen() {
 
         <label className="checkbox-row">
           <input type="checkbox" checked={autoAnalyze} onChange={(e) => setAutoAnalyze(e.target.checked)} disabled={busy} />
-          <span>Analyze clauses, risks, and summary right after upload</span>
+          <span>Run full clause audit, loophole detection, and 5-axis scorecard right after upload</span>
         </label>
         {user?.organizationId && (
           <label className="checkbox-row">
@@ -168,6 +257,12 @@ export default function UploadScreen() {
                 />
               </div>
             )}
+            {stageMessage && (
+              <div className="live-stage-caption">
+                <span>{stageMessage}</span>
+                <span className="mono-caption">{percent}%</span>
+              </div>
+            )}
             {STEPS.slice(0, autoAnalyze ? 4 : 2).map((label, idx) => {
               const id = idx + 1;
               const done = step > id || (step === 4 && id === 4);
@@ -186,7 +281,7 @@ export default function UploadScreen() {
 
         <div className="upload-security-note">
           <LockIcon size={14} />
-          <span>Your uploaded files stay private to your account unless you choose to share them with your team.</span>
+          <span>Your uploaded agreements remain private to your account unless explicitly shared with your team.</span>
         </div>
 
         <div className="form-footer-row">

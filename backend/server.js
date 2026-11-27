@@ -20,6 +20,8 @@ const analyticsRoutes = require("./routes/analyticsRoutes");
 const systemRoutes = require("./routes/systemRoutes");
 const teamRoutes = require("./routes/teamRoutes");
 const playbookRoutes = require("./routes/playbookRoutes");
+const baselineRoutes = require("./routes/baselineRoutes");
+const clauseBankRoutes = require("./routes/clauseBankRoutes");
 
 const app = express();
 const isProd = process.env.NODE_ENV === "production";
@@ -65,21 +67,23 @@ app.use(
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
-    exposedHeaders: ["X-Request-Id", "Retry-After"],
+    exposedHeaders: ["X-Request-Id", "Retry-After", "Content-Disposition"],
   })
 );
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "4mb" }));
 app.use(sanitizeRequest);
 app.use(generalLimiter);
 
 app.get("/", (req, res) => {
   res.json({
     status: "Legal Contract Agent API is running",
-    version: "2.1.0",
+    version: "3.0.0",
     endpoints: {
       auth: "/api/auth",
       contracts: "/api/contracts",
+      baselines: "/api/baselines",
+      clauseBank: "/api/clause-bank",
       playbook: "/api/playbook",
       team: "/api/team",
       feedback: "/api/feedback",
@@ -99,7 +103,7 @@ const healthHandler = (req, res) => {
   res.status(dbConnected ? 200 : 503).json({
     status: dbConnected ? "healthy" : "degraded",
     service: "Legal Contract Agent API",
-    version: "2.1.0",
+    version: "3.0.0",
     uptimeSeconds: Math.round(process.uptime()),
     database: dbConnected ? "connected" : "disconnected",
     aiPool: {
@@ -154,6 +158,8 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/system", systemRoutes);
 app.use("/api/team", teamRoutes);
 app.use("/api/playbook", playbookRoutes);
+app.use("/api/baselines", baselineRoutes);
+app.use("/api/clause-bank", clauseBankRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -220,11 +226,17 @@ const startServer = async () => {
     await connectDB();
     httpServer = app.listen(PORT, () => {
       console.log(`API server listening on http://localhost:${PORT}`);
-      aiClient.startKeepAlive();
+      aiClient.startKeepAlive({
+        onPulse: async () => {
+          if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
+            await mongoose.connection.db.admin().ping().catch(() => {});
+          }
+        },
+      });
     });
     httpServer.keepAliveTimeout = 65000;
     httpServer.headersTimeout = 66000;
-    httpServer.requestTimeout = 150000;
+    httpServer.requestTimeout = 190000;
   } catch (error) {
     console.error("Failed to start server:", error.message);
     process.exit(1);

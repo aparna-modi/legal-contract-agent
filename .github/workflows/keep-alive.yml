@@ -2,8 +2,8 @@ name: Keep-Alive — Render Services
 
 on:
   schedule:
-    # Ping every 10 minutes (shorter than Render's 15-minute idle spin-down window)
-    - cron: "*/10 * * * *"
+    # Ping every 5 minutes so Render free-tier services never hit the 15-minute idle spin-down
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 concurrency:

@@ -16,17 +16,20 @@ T = TypeVar("T", bound=BaseModel)
 FAST_GEMINI_MODELS = (
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
     "gemini-3.5-flash",
 )
 BALANCED_GEMINI_MODELS = (
     "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
+    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite",
 )
 STRONG_GEMINI_MODELS = (
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-3.5-flash",
 )
 MODEL_TRANSIENT_COOLDOWN_SECONDS = 15.0
 MODEL_QUOTA_COOLDOWN_SECONDS = 45.0
@@ -58,16 +61,18 @@ class LLMClient:
     def is_llm_available(self) -> bool:
         return bool(self._get_gemini_key() or self._get_openai_key())
 
-    def _get_genai_client(self, api_key: str):
-        if api_key not in self._clients:
+    def _get_genai_client(self, api_key: str, timeout_seconds: float = 45.0):
+        bucket_ms = 90_000 if timeout_seconds >= 55.0 else (55_000 if timeout_seconds >= 35.0 else 32_000)
+        cache_key = f"{api_key}:{bucket_ms}"
+        if cache_key not in self._clients:
             from google import genai
             from google.genai import types
 
-            self._clients[api_key] = genai.Client(
+            self._clients[cache_key] = genai.Client(
                 api_key=api_key,
-                http_options=types.HttpOptions(timeout=22_000),
+                http_options=types.HttpOptions(timeout=bucket_ms),
             )
-        return self._clients[api_key]
+        return self._clients[cache_key]
 
     def _model_candidates(self, tier: str = "balanced") -> tuple[str, ...]:
         override = os.environ.get("GEMINI_LLM_MODEL", "").strip()
@@ -195,7 +200,7 @@ class LLMClient:
         try:
             from google.genai import types
 
-            client = self._get_genai_client(api_key)
+            client = self._get_genai_client(api_key, timeout_seconds=timeout)
         except Exception:
             return None
 
@@ -282,7 +287,7 @@ class LLMClient:
         try:
             from google.genai import types
 
-            client = self._get_genai_client(api_key)
+            client = self._get_genai_client(api_key, timeout_seconds=timeout)
         except Exception:
             return None
 

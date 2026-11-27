@@ -1,18 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { contractsApi } from "../api/client";
+import { baselinesApi, contractsApi } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { CheckIcon, CompareIcon, CopyIcon, DownloadIcon, PlusIcon, SlidersIcon, SwapIcon } from "../components/Icons";
+import { AlertTriangleIcon, CheckCircleIcon, CheckIcon, CompareIcon, CopyIcon, DownloadIcon, PlusIcon, ScaleIcon, SlidersIcon, SwapIcon } from "../components/Icons";
 import { ExpandableSection, FadePanel, PageReveal } from "../components/Motion";
 import { SPRING_SNAPPY } from "../components/motionTokens";
 
-function wordDiff(textA = "", textB = "") {
-  const a = String(textA).split(/(\s+)/);
-  const b = String(textB).split(/(\s+)/);
-  if (a.length > 350 || b.length > 350) {
-    return { left: [{ text: textA, type: "same" }], right: [{ text: textB, type: "same" }] };
-  }
+function computeLcsDiff(a, b) {
   const m = a.length;
   const n = b.length;
   const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
@@ -41,12 +36,27 @@ function wordDiff(textA = "", textB = "") {
   return { left, right };
 }
 
+function wordDiff(textA = "", textB = "") {
+  const a = String(textA).split(/(\s+)/);
+  const b = String(textB).split(/(\s+)/);
+  if (a.length <= 240 && b.length <= 240) {
+    return computeLcsDiff(a, b);
+  }
+  // Sentence-level diff for long clauses so redlines stay crisp without O(n^2) memory spikes
+  const sentA = String(textA).split(/(?<=[.;?!])\s+/).map((s) => `${s} `);
+  const sentB = String(textB).split(/(?<=[.;?!])\s+/).map((s) => `${s} `);
+  if (sentA.length <= 160 && sentB.length <= 160) {
+    return computeLcsDiff(sentA, sentB);
+  }
+  return { left: [{ text: textA, type: "del" }], right: [{ text: textB, type: "add" }] };
+}
+
 function exportComparisonMarkdown(result) {
   if (!result) return;
   const lines = [
     `# Revision Comparison: ${result.contract_a} vs ${result.contract_b}`,
     "",
-    "> **Disclaimer:** AI-assisted revision diff for informational review only — not legal advice.",
+    "> **Counsel Notice:** Clause-level revision diff prepared for pre-execution review.",
     "",
     "## Executive Summary",
     result.executive_summary || "Comparison completed.",
@@ -105,13 +115,17 @@ const RedlineText = ({ segments }) => (
 
 export default function Compare() {
   const { token } = useAuth();
+  const [mode, setMode] = useState("contracts");
   const [contracts, setContracts] = useState([]);
+  const [baselines, setBaselines] = useState([]);
   const [loading, setLoading] = useState(Boolean(token));
   const [idA, setIdA] = useState("");
   const [idB, setIdB] = useState("");
+  const [baselineId, setBaselineId] = useState("");
   const [comparing, setComparing] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
+  const [benchmarkResult, setBenchmarkResult] = useState(null);
   const [tab, setTab] = useState("modified");
   const [redline, setRedline] = useState(true);
 
@@ -122,15 +136,19 @@ export default function Compare() {
   useEffect(() => {
     if (!token) return;
     let active = true;
-    contractsApi.list(token)
-      .then(({ contracts: list = [] }) => {
+    Promise.all([
+      contractsApi.list(token),
+      baselinesApi.list(token).catch(() => ({ baselines: [] })),
+    ])
+      .then(([contractRes, baseRes]) => {
         if (!active) return;
-        const done = list.filter((c) => c.status === "completed");
+        const done = (contractRes.contracts || []).filter((c) => c.status === "completed");
+        const baseList = baseRes.baselines || [];
         setContracts(done);
-        if (done.length >= 2) {
-          setIdA((v) => v || done[0]._id);
-          setIdB((v) => v || done[1]._id);
-        }
+        setBaselines(baseList);
+        if (done.length >= 1) setIdA((v) => v || done[0]._id);
+        if (done.length >= 2) setIdB((v) => v || done[1]._id);
+        if (baseList.length >= 1) setBaselineId((v) => v || (baseList[0]._id || baseList[0].id));
       })
       .catch((err) => active && setError(err.message))
       .finally(() => active && setLoading(false));
@@ -139,6 +157,22 @@ export default function Compare() {
 
   const compare = async (e) => {
     e.preventDefault();
+    if (mode === "baseline") {
+      if (!idA || !baselineId) return;
+      setComparing(true);
+      setError(null);
+      setBenchmarkResult(null);
+      try {
+        const res = await baselinesApi.benchmark(token, baselineId, { contractId: idA });
+        setBenchmarkResult(res);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setComparing(false);
+      }
+      return;
+    }
+
     if (!idA || !idB) return;
     if (idA === idB) return setError("Choose two different contracts to compare.");
     setComparing(true);
@@ -187,16 +221,17 @@ export default function Compare() {
   };
 
   const rc = result?.risk_comparison;
+  const bench = benchmarkResult?.benchmark || benchmarkResult;
 
   return (
     <PageReveal className="workspace-page">
       <div className="page-header">
         <div>
-          <h1 className="page-heading">Revision Comparison</h1>
-          <p className="page-description">Compare two versions of a contract side by side to see every changed word, risk shift, and suggested counter-edit.</p>
+          <h1 className="page-heading">Revision &amp; Baseline Comparison</h1>
+          <p className="page-description">Compare two contract versions word by word, or benchmark any agreement against your Gold-Standard Firm Baselines.</p>
         </div>
         <div className="page-header-actions">
-          {result && (
+          {mode === "contracts" && result && (
             <button type="button" className="btn btn-secondary" onClick={() => exportComparisonMarkdown(result)}>
               <DownloadIcon size={15} /> Export Diff (.md)
             </button>
@@ -205,56 +240,194 @@ export default function Compare() {
         </div>
       </div>
 
+      <div className="compare-mode-bar">
+        <div className="segmented-control">
+          <button
+            type="button"
+            className={`seg-btn ${mode === "contracts" ? "active" : ""}`}
+            onClick={() => { setMode("contracts"); setError(null); }}
+          >
+            Two Uploaded Contracts
+          </button>
+          <button
+            type="button"
+            className={`seg-btn ${mode === "baseline" ? "active" : ""}`}
+            onClick={() => { setMode("baseline"); setError(null); }}
+          >
+            Contract vs. Firm Baseline
+          </button>
+        </div>
+      </div>
+
       {loading ? (
-        <div className="surface-card state-box"><div className="spinner" /><p>Loading analyzed contracts...</p></div>
-      ) : contracts.length < 2 ? (
+        <div className="surface-card state-box"><div className="spinner" /><p>Loading analyzed contracts and baselines...</p></div>
+      ) : mode === "contracts" && contracts.length < 2 ? (
         <div className="surface-card empty-box">
           <CompareIcon size={26} />
           <h3>At least two analyzed contracts are needed</h3>
-          <p>Upload and analyze two agreements to run a clause-by-clause redline comparison.</p>
+          <p>Upload and analyze two agreements to run a clause-by-clause redline comparison, or switch to Firm Baseline mode above.</p>
           <div className="hero-actions">
             <Link to="/upload" className="btn btn-primary">Upload Contract</Link>
-            <Link to="/" className="btn btn-secondary">Back to Workspace</Link>
+            {contracts.length >= 1 && baselines.length >= 1 && (
+              <button type="button" className="btn btn-secondary" onClick={() => setMode("baseline")}>
+                Benchmark Against Baseline
+              </button>
+            )}
           </div>
+        </div>
+      ) : mode === "baseline" && contracts.length < 1 ? (
+        <div className="surface-card empty-box">
+          <ScaleIcon size={26} />
+          <h3>Upload at least one analyzed contract</h3>
+          <p>Analyze an agreement first, then benchmark it against curated or custom firm baselines.</p>
+          <Link to="/upload" className="btn btn-primary">Upload Contract</Link>
         </div>
       ) : (
         <>
           <form onSubmit={compare} className="surface-card compare-selector">
-            <div className="compare-picker-grid">
-              <div className="field">
-                <label htmlFor="contract-a" className="field-label">Baseline Contract (A)</label>
-                <select id="contract-a" className="select-input" value={idA} onChange={(e) => setIdA(e.target.value)} disabled={comparing}>
-                  {contracts.map((c) => <option key={c._id} value={c._id}>{c.title || c.fileName}</option>)}
-                </select>
+            {mode === "contracts" ? (
+              <div className="compare-picker-grid">
+                <div className="field">
+                  <label htmlFor="contract-a" className="field-label">Baseline Contract (A)</label>
+                  <select id="contract-a" className="select-input" value={idA} onChange={(e) => setIdA(e.target.value)} disabled={comparing}>
+                    {contracts.map((c) => <option key={c._id} value={c._id}>{c.title || c.fileName}</option>)}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  className="icon-btn swap-btn"
+                  title="Swap contracts"
+                  aria-label="Swap contracts"
+                  disabled={comparing}
+                  onClick={() => { setIdA(idB); setIdB(idA); setResult(null); }}
+                >
+                  <SwapIcon size={16} />
+                </button>
+                <div className="field">
+                  <label htmlFor="contract-b" className="field-label">Revised Contract (B)</label>
+                  <select id="contract-b" className="select-input" value={idB} onChange={(e) => setIdB(e.target.value)} disabled={comparing}>
+                    {contracts.map((c) => <option key={c._id} value={c._id}>{c.title || c.fileName}</option>)}
+                  </select>
+                </div>
               </div>
-              <button
-                type="button"
-                className="icon-btn swap-btn"
-                title="Swap contracts"
-                aria-label="Swap contracts"
-                disabled={comparing}
-                onClick={() => { setIdA(idB); setIdB(idA); setResult(null); }}
-              >
-                <SwapIcon size={16} />
-              </button>
-              <div className="field">
-                <label htmlFor="contract-b" className="field-label">Revised Contract (B)</label>
-                <select id="contract-b" className="select-input" value={idB} onChange={(e) => setIdB(e.target.value)} disabled={comparing}>
-                  {contracts.map((c) => <option key={c._id} value={c._id}>{c.title || c.fileName}</option>)}
-                </select>
+            ) : (
+              <div className="draft-two-col">
+                <div className="field">
+                  <label htmlFor="bench-contract" className="field-label">Contract Under Review</label>
+                  <select id="bench-contract" className="select-input" value={idA} onChange={(e) => setIdA(e.target.value)} disabled={comparing}>
+                    {contracts.map((c) => <option key={c._id} value={c._id}>{c.title || c.fileName}</option>)}
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor="bench-baseline" className="field-label">Gold-Standard / Firm Baseline</label>
+                  <select id="bench-baseline" className="select-input" value={baselineId} onChange={(e) => setBaselineId(e.target.value)} disabled={comparing}>
+                    {baselines.map((b) => (
+                      <option key={b._id || b.id} value={b._id || b.id}>
+                        {b.name} {b.isCurated ? "(Firm Standard)" : "(Saved)"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
-            </div>
+            )}
+
             <div className="compare-submit-row">
-              <button type="submit" className="btn btn-primary" disabled={comparing || !idA || !idB}>
-                <CompareIcon size={15} /> {comparing ? "Comparing..." : "Run Redline Comparison"}
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={comparing || !idA || (mode === "contracts" ? !idB : !baselineId)}
+              >
+                <CompareIcon size={15} />{" "}
+                {comparing
+                  ? mode === "baseline" ? "Benchmarking..." : "Comparing..."
+                  : mode === "baseline" ? "Benchmark Against Baseline" : "Run Redline Comparison"}
               </button>
             </div>
           </form>
 
           {error && <div className="alert alert-error">{error}</div>}
-          {comparing && <div className="surface-card state-box"><div className="spinner" /><p>Comparing clauses and checking how risk changed between versions...</p></div>}
+          {comparing && (
+            <div className="surface-card state-box">
+              <div className="spinner" />
+              <p>{mode === "baseline" ? "Scoring contract clauses and structure against the selected firm baseline..." : "Comparing clauses and calculating commercial risk shifts between revisions..."}</p>
+            </div>
+          )}
 
-          {result && (
+          {mode === "baseline" && bench && (
+            <div className="compare-results">
+              <div className="compare-delta-strip">
+                <div className="kpi-card">
+                  <span className="kpi-label">Baseline Conformity</span>
+                  <span className={`kpi-value ${(bench.conformity_score || 0) >= 80 ? "text-accent" : (bench.conformity_score || 0) >= 60 ? "text-warn" : "text-danger"}`}>
+                    {bench.conformity_score ?? 0}<small className="kpi-unit">/100</small>
+                  </span>
+                  <span className="kpi-sub">Vs. {bench.baseline_title || "Firm Standard"}</span>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Section Coverage</span>
+                  <span className="kpi-value">{bench.section_coverage_pct ?? 0}<small className="kpi-unit">%</small></span>
+                  <span className="kpi-sub">{bench.matched_baseline_sections?.length || 0} standard sections present</span>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Presentation Score</span>
+                  <span className="kpi-value">{bench.target_presentation_score ?? 0}<small className="kpi-unit">/100</small></span>
+                  <span className="kpi-sub">Baseline target: {bench.baseline_presentation_score ?? 100}/100</span>
+                </div>
+                <div className="kpi-card">
+                  <span className="kpi-label">Missing Sections</span>
+                  <span className={`kpi-value ${(bench.missing_baseline_sections?.length || 0) > 0 ? "text-danger" : "text-accent"}`}>
+                    {bench.missing_baseline_sections?.length || 0}
+                  </span>
+                  <span className="kpi-sub">Absent from target contract</span>
+                </div>
+              </div>
+
+              <section className="surface-card compare-summary-card">
+                <div className="section-eyebrow">Baseline Conformity Assessment</div>
+                <p className="summary-prose">{bench.recommendation || "Baseline conformity benchmark completed."}</p>
+
+                {bench.missing_baseline_sections?.length > 0 && (
+                  <div className="compare-highlights">
+                    <div className="section-eyebrow">Missing Baseline Sections</div>
+                    <div className="citation-row">
+                      {bench.missing_baseline_sections.map((c, idx) => (
+                        <span key={idx} className="risk-pill risk-high">{c}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {bench.target_presentation_checklist?.length > 0 && (
+                  <div className="compare-highlights">
+                    <div className="section-eyebrow">10-Point Legal Presentation Checklist</div>
+                    <div className="checklist-compact">
+                      {bench.target_presentation_checklist.map((item, idx) => (
+                        <div key={idx} className="checklist-row">
+                          {item.passed
+                            ? <CheckCircleIcon size={13} className="text-accent" />
+                            : <AlertTriangleIcon size={13} className="text-danger" />}
+                          <span>{item.criterion}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {bench.matched_baseline_sections?.length > 0 && (
+                  <div className="compare-highlights">
+                    <div className="section-eyebrow">Aligned Baseline Sections ({bench.matched_baseline_sections.length})</div>
+                    <div className="citation-row">
+                      {bench.matched_baseline_sections.map((s, idx) => (
+                        <span key={idx} className="risk-pill risk-low">{s}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
+
+          {mode === "contracts" && result && (
             <div className="compare-results">
               {rc && (
                 <div className="compare-delta-strip">
@@ -304,7 +477,7 @@ export default function Compare() {
                 {result.recommendation && (
                   <div className="recommendation-box"><strong>Review Takeaway:</strong> {result.recommendation}</div>
                 )}
-                <p className="legal-disclaimer">AI-assisted revision diff for informational review only — not legal advice.</p>
+                <p className="legal-disclaimer">Clause-level revision diff prepared for counsel review prior to execution.</p>
               </section>
 
               <div className="diff-toolbar-row">

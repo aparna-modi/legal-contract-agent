@@ -12,6 +12,32 @@ from services.llm_client import llm_client
 _PAGE_MARKER_RE = re.compile(r"^(?:page\s+\d+(?:\s+of\s+\d+)?|[-–—\s]*\d+[-–—\s]*)$", re.IGNORECASE)
 _SIGNATURE_LINE_RE = re.compile(r"^[_=\-]{4,}$")
 _MAX_CHUNK_TOKENS = 520
+_MAJOR_SECTION_RE = re.compile(
+    r"^(?:(?:SECTION|ARTICLE|CLAUSE|SCHEDULE|ANNEXURE|EXHIBIT|PART)\s+[A-Z0-9IVX]+(?:[.\-:\s]+[^\n]{0,80})?|"
+    r"\d{1,2}\.\s+[A-Z][A-Z0-9\s,&/\-()]{2,72})(?:\s*$|\s*[:.\-–—]\s*)",
+    re.IGNORECASE,
+)
+
+
+def _extract_major_section_title(line: str, clause_num: Optional[str], line_is_heading: bool) -> Optional[str]:
+    """Return a clean section heading whenever a line introduces a major section, article, or schedule."""
+    stripped = (line or "").strip()
+    if not stripped:
+        return None
+    if re.match(r"^(?:SECTION|ARTICLE|SCHEDULE|ANNEXURE|EXHIBIT|PART)\s+[A-Z0-9IVX]+", stripped, re.I):
+        head = stripped.split("\n", 1)[0].strip()
+        # Trim inline body text if a period + lowercase sentence follows an uppercase title
+        m_inline = re.match(r"^((?:SECTION|ARTICLE|SCHEDULE|ANNEXURE|EXHIBIT|PART)\s+[A-Z0-9IVX]+[^.\n]{0,75}?)\.\s+[A-Z][a-z]", head)
+        return (m_inline.group(1) if m_inline else head)[:95].rstrip(" :-.")
+    if clause_num and "." not in clause_num:
+        m_num = re.match(r"^(\d{1,2}\.\s+[A-Z][A-Z0-9\s,&/\-()]{2,70}?)(?:\.\s+[A-Z][a-z]|$)", stripped)
+        if m_num:
+            return m_num.group(1).strip().rstrip(" :-.")
+        if line_is_heading and len(stripped) <= 90:
+            return stripped.rstrip(" :-.")
+    if line_is_heading and not clause_num and len(stripped) <= 90:
+        return stripped.rstrip(" :-.")
+    return None
 
 
 class PDFDocumentExtractor(BaseDocumentExtractor):
@@ -91,9 +117,18 @@ class PDFDocumentExtractor(BaseDocumentExtractor):
                     text = "\n".join(cleaned_lines)
                     first_line = cleaned_lines[0]
                     clause_num = extract_clause_number(first_line)
-                    detected_head = first_line if is_heading(first_line) else None
+                    line_is_head = is_heading(first_line)
+                    detected_head = _extract_major_section_title(first_line, clause_num, line_is_head)
                     if detected_head:
                         active_section = detected_head
+                    else:
+                        # Also scan early lines inside a merged block for explicit SECTION/SCHEDULE headers.
+                        for inner in cleaned_lines[1:3]:
+                            inner_head = _extract_major_section_title(inner, extract_clause_number(inner), is_heading(inner))
+                            if inner_head and re.match(r"^(?:SECTION|ARTICLE|SCHEDULE|ANNEXURE|\d{1,2}\.\s+[A-Z]{3,})", inner_head, re.I):
+                                active_section = inner_head
+                                detected_head = inner_head
+                                break
                     blocks.append({
                         "text": text,
                         "heading": active_section,
@@ -156,23 +191,25 @@ class PDFDocumentExtractor(BaseDocumentExtractor):
                 active_section = merged
                 continue
 
-            # A numbered sub-clause starts a fresh clause block under the current section.
+            # A numbered major section or sub-clause starts a fresh clause block.
             if clause_num:
                 flush()
-                if line_is_heading:
+                major_title = _extract_major_section_title(line, clause_num, line_is_heading)
+                if major_title:
+                    active_section = major_title
+                    pending_heading = major_title
+                elif line_is_heading:
                     # Short sub-heading such as "9.1 Default by Purchaser:"
-                    cur_clause_num = clause_num
-                    cur_lines = [line]
                     pending_heading = line
-                else:
-                    cur_clause_num = clause_num
-                    cur_lines = [line]
+                cur_clause_num = clause_num
+                cur_lines = [line]
                 continue
 
-            if line_is_heading:
+            if line_is_heading or _MAJOR_SECTION_RE.match(line):
                 flush()
-                active_section = line
-                pending_heading = line
+                clean_title = _extract_major_section_title(line, None, True) or line
+                active_section = clean_title
+                pending_heading = clean_title
                 # If the very next line is also a heading or a numbered sub-clause,
                 # emit this standalone section title as a heading chunk only when needed
                 # or let it stay attached to the following paragraph.

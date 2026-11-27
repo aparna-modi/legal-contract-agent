@@ -192,7 +192,7 @@ export default function LibrarySearchModal({ initialQuery, token, onClose }) {
                   ))}
                 </div>
               )}
-              <p className="legal-disclaimer">AI-assisted search across your uploaded contracts — not legal advice.</p>
+              <p className="legal-disclaimer">Cross-document search grounded strictly in your uploaded contract library. Verify source clauses prior to execution.</p>
             </div>
           )}
         </div>

@@ -10,7 +10,17 @@ const { aiClient, extractAiErrorMessage } = require("../utils/aiClient");
 const { recordAudit } = require("../utils/audit");
 
 const router = express.Router();
-const VALID_RULE_TYPES = new Set(["require_clause", "forbidden_keyword", "max_high_risk", "allowed_jurisdiction", "min_notice_days"]);
+const VALID_RULE_TYPES = new Set([
+  "require_clause",
+  "forbidden_keyword",
+  "max_high_risk",
+  "allowed_jurisdiction",
+  "min_notice_days",
+  "require_defined_term",
+  "forbid_unilateral_amendment",
+  "require_cure_period_days",
+  "max_liability_cap_months",
+]);
 
 const JURISDICTION_PRESETS = {
   us_commercial: {
@@ -62,6 +72,20 @@ const JURISDICTION_PRESETS = {
       { name: "Require Intellectual Property Clause", ruleType: "require_clause", target: "Intellectual Property", severity: "high", guidance: "Condition IP assignment strictly upon receipt of full payment and carve out pre-existing tools." },
       { name: "Flag Unpaid Work / Broad Non-Compete", ruleType: "forbidden_keyword", target: "non-compete, forfeit all fees, without compensation", severity: "high", guidance: "Remove broad non-competes and require payment for all work completed through termination." },
       { name: "Minimum 14-Day Termination Notice", ruleType: "min_notice_days", target: "14", severity: "medium", guidance: "Ensure at least 14 days written notice and pro-rated kill fee on early cancellation." },
+    ],
+  },
+  india_litigation_ready: {
+    id: "india_litigation_ready",
+    label: "India Litigation & Loophole Hardening Pack",
+    jurisdiction: "India (ICA 1872 · Arbitration Act · BNS 2023)",
+    description: "Senior counsel enforcement pack enforcing breach cure windows, defined terminology discipline, bilateral amendments, liability caps, and clear Indian court/arbitration seats.",
+    rules: [
+      { name: "Approved Indian Venue & Arbitration Seat", ruleType: "allowed_jurisdiction", target: "India, Karnataka, Bengaluru, Maharashtra, Mumbai, Delhi, Hyderabad, Chennai", severity: "high", guidance: "Specify Indian governing law, exclusive civil court city, and mutually appointed arbitration seat." },
+      { name: "Forbid Unilateral Amendment Backdoors", ruleType: "forbid_unilateral_amendment", target: "true", severity: "high", guidance: "Require all policy and contract amendments to be executed in writing by both Parties." },
+      { name: "Minimum 30-Day Breach Cure Period", ruleType: "require_cure_period_days", target: "30", severity: "high", guidance: "Mandate at least 30 days written cure notice before default remedies or termination trigger." },
+      { name: "Liability Cap <= 12 Months Fees", ruleType: "max_liability_cap_months", target: "12", severity: "high", guidance: "Eliminate uncapped exposure and cap aggregate liability at 12 months' fees with statutory carve-outs." },
+      { name: "Require Defined Confidentiality Terminology", ruleType: "require_defined_term", target: "Confidential Information", severity: "medium", guidance: "Formally define 'Confidential Information' with explicit survival and return/destruction duties." },
+      { name: "Flag Void Post-Termination Non-Compete (Sec. 27)", ruleType: "forbidden_keyword", target: "non-compete, restraint of trade, unlimited liability, sole discretion", severity: "high", guidance: "Replace void Sec. 27 restraints and unilateral discretion with enforceable confidentiality and objective criteria." },
     ],
   },
 };

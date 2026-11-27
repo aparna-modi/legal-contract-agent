@@ -38,15 +38,17 @@ const SAFE_RETRY_NON_GET_PREFIXES = [
   "/api/contracts/compare",
   "/api/contracts/search",
   "/api/contracts/clauses/redline-adhoc",
+  "/api/contracts/export-docx",
   "/api/playbook/evaluate",
   "/api/playbook/generate-rules",
+  "/api/baselines",
   "/api/system/warmup",
 ];
 
 function isSafeToRetryGatewayError(path, method) {
   if (method === "GET") return true;
   if (path === "/api/contracts/draft/save" || path === "/api/contracts/upload") return false;
-  if (/^\/api\/contracts\/[^/]+\/(ask|draft-missing-clause|clauses\/[^/]+\/suggest-redline)$/.test(path)) {
+  if (/^\/api\/contracts\/[^/]+\/(ask|draft-missing-clause|clauses\/[^/]+\/suggest-redline|loopholes|rewrite-user-only|case-strategy|legal-notice|negotiation-email)$/.test(path)) {
     return true;
   }
   return SAFE_RETRY_NON_GET_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
@@ -193,12 +195,24 @@ export const contractsApi = {
   risks: (token, id) => request(`/api/contracts/${id}/risks`, { token }),
   qaHistory: (token, id) => request(`/api/contracts/${id}/qa`, { token }),
   summary: (token, id) => request(`/api/contracts/${id}/summary`, { token }),
-  ask: (token, id, query, history = []) =>
+  ask: (token, id, query, history = [], qaMode = "facts") =>
     request(`/api/contracts/${id}/ask`, {
       method: "POST",
       token,
-      body: { query, top_k: 6, min_score: 0.20, history },
+      body: { query, top_k: 6, min_score: 0.20, history, qaMode },
     }),
+  setPerspective: (token, id, payload) =>
+    request(`/api/contracts/${id}/perspective`, { method: "PATCH", token, body: payload }),
+  auditLoopholes: (token, id, payload = {}) =>
+    request(`/api/contracts/${id}/loopholes`, { method: "POST", token, body: payload }),
+  rewriteUserOnly: (token, id, payload = {}) =>
+    request(`/api/contracts/${id}/rewrite-user-only`, { method: "POST", token, body: payload }),
+  caseStrategy: (token, id, payload = {}) =>
+    request(`/api/contracts/${id}/case-strategy`, { method: "POST", token, body: payload }),
+  legalNotice: (token, id, payload = {}) =>
+    request(`/api/contracts/${id}/legal-notice`, { method: "POST", token, body: payload }),
+  negotiationEmail: (token, id, payload = {}) =>
+    request(`/api/contracts/${id}/negotiation-email`, { method: "POST", token, body: payload }),
   search: (token, query) =>
     request("/api/contracts/search", {
       method: "POST",
@@ -216,8 +230,49 @@ export const contractsApi = {
     request("/api/contracts/draft", { method: "POST", token, body: payload }),
   reviseDraft: (token, payload) =>
     request("/api/contracts/draft/revise", { method: "POST", token, body: payload }),
+  auditDraftLoopholes: (token, payload) =>
+    request("/api/contracts/draft/audit-loopholes", { method: "POST", token, body: payload }),
+  hardenDraft: (token, payload) =>
+    request("/api/contracts/draft/harden", { method: "POST", token, body: payload }),
+  standardizeBaseline: (token, payload) =>
+    request("/api/contracts/draft/standardize-baseline", { method: "POST", token, body: payload }),
   saveDraft: (token, payload) =>
     request("/api/contracts/draft/save", { method: "POST", token, body: payload }),
+  downloadDocx: async (token, payload, filename = "contract") => {
+    const res = await fetchWithAuth("/api/contracts/export-docx", {
+      method: "POST",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.message || "Could not generate Word (.docx) export.");
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${String(filename || "contract").replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 60)}.docx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  },
+  downloadDeadlinesIcs: async (token, contractId = null, filename = "contract_deadlines") => {
+    const path = contractId ? `/api/contracts/${contractId}/deadlines.ics` : "/api/contracts/deadlines/calendar.ics";
+    const res = await fetchWithAuth(path, { token });
+    if (!res.ok) throw new Error("Could not export deadlines calendar.");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${String(filename).replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 50)}.ics`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  },
   vectorStats: (token) => request("/api/contracts/stats/vectors", { token }),
   remove: (token, id) => request(`/api/contracts/${id}`, { method: "DELETE", token }),
   fetchFileBlobUrl: async (token, id) => {
@@ -277,6 +332,20 @@ export const feedbackApi = {
 
 export const analyticsApi = {
   overview: (token) => request("/api/analytics/overview", { token }),
+};
+
+export const baselinesApi = {
+  list: (token) => request("/api/baselines", { token }),
+  save: (token, payload) => request("/api/baselines", { method: "POST", token, body: payload }),
+  remove: (token, id) => request(`/api/baselines/${id}`, { method: "DELETE", token }),
+  benchmark: (token, baselineId, payload) =>
+    request(`/api/baselines/${baselineId}/benchmark`, { method: "POST", token, body: payload }),
+};
+
+export const clauseBankApi = {
+  list: (token) => request("/api/clause-bank", { token }),
+  save: (token, payload) => request("/api/clause-bank", { method: "POST", token, body: payload }),
+  remove: (token, id) => request(`/api/clause-bank/${id}`, { method: "DELETE", token }),
 };
 
 export const systemApi = {

@@ -3,7 +3,7 @@ const path = require("path");
 
 const FAILURE_THRESHOLD = Number(process.env.AI_CIRCUIT_THRESHOLD || 3);
 const COOLDOWN_MS = Number(process.env.AI_CIRCUIT_COOLDOWN_MS || 20000);
-const DEFAULT_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || (process.env.NODE_ENV === "production" ? 90000 : 60000));
+const DEFAULT_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || (process.env.NODE_ENV === "production" ? 155000 : 90000));
 const HEALTH_TIMEOUT_MS = Number(process.env.AI_HEALTH_TIMEOUT_MS || 15000);
 const MAX_RETRIES = Number(process.env.AI_MAX_RETRIES || 2);
 
@@ -378,17 +378,16 @@ class AiServicePool {
   }
 
   /**
-   * Periodic production keep-alive heartbeat that pings the AI service (and optionally
-   * this backend's own external Render URL + frontend URL) every 9 minutes so Render
-   * free-tier services stay warm and responsive.
+   * Periodic production keep-alive heartbeat that keeps the AI service, MongoDB pool,
+   * backend external URL, and frontend SPA warm so zero services ever go idle or sleep.
    */
-  startKeepAlive() {
+  startKeepAlive({ onPulse } = {}) {
     const enabled =
       process.env.ENABLE_KEEP_ALIVE === "true" ||
       (process.env.NODE_ENV === "production" && process.env.ENABLE_KEEP_ALIVE !== "false");
     if (!enabled || this._keepAliveTimer) return;
 
-    const intervalMs = Math.max(60000, Number(process.env.KEEP_ALIVE_INTERVAL_MS || 540000));
+    const intervalMs = Math.max(60000, Number(process.env.KEEP_ALIVE_INTERVAL_MS || 240000));
 
     const pingAll = async () => {
       this._syncNodes();
@@ -406,12 +405,16 @@ class AiServicePool {
         }
       }
 
-      const selfUrl = (process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_BACKEND_URL || "").trim().replace(/\/+$/, "");
+      if (typeof onPulse === "function") {
+        await onPulse().catch(() => {});
+      }
+
+      const selfUrl = (process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_BACKEND_URL || process.env.APP_URL || "").trim().replace(/\/+$/, "");
       if (selfUrl) {
         await fetch(`${selfUrl}/health/live`, { signal: AbortSignal.timeout(15000) }).catch(() => {});
       }
 
-      const frontendUrl = (process.env.FRONTEND_URL || "").trim().replace(/\/+$/, "");
+      const frontendUrl = (process.env.FRONTEND_URL || process.env.APP_URL || "").trim().replace(/\/+$/, "");
       if (frontendUrl) {
         await fetch(frontendUrl, { signal: AbortSignal.timeout(15000) }).catch(() => {});
       }

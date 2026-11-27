@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -15,11 +15,15 @@ logger = logging.getLogger(__name__)
 
 from extractors import ExtractionResult
 from services.analysis_service import analysis_service
+from services.case_strategy_service import case_strategy_service
+from services.docx_export_service import build_legal_docx
 from services.drafting_service import drafting_service
 from services.embedding_service import embedding_service
 from services.extraction_service import ExtractionService
 from services.health_service import get_health_status
+from services.loophole_service import loophole_service
 from services.playbook_service import playbook_service
+from services.protective_rewrite_service import protective_rewrite_service
 from services.retrieval_service import retrieval_service
 from services.security import is_production, require_internal_auth
 from services.vector_store import vector_store
@@ -30,7 +34,7 @@ _LATENCY_COUNT = 0
 
 app = FastAPI(
     title="Legal Contract Agent - AI Service",
-    version="2.1.0",
+    version="3.0.0",
     docs_url=None if is_production() else "/docs",
     redoc_url=None if is_production() else "/redoc",
 )
@@ -116,12 +120,101 @@ class RetrieveRequest(BaseModel):
     use_reranker: bool = True
     fallback_chunks: Optional[List[Dict[str, Any]]] = None
     conversation_history: Optional[List[Dict[str, str]]] = None
+    qa_mode: str = Field(default="facts", max_length=32)
 
 
 class AnalyzeContractRequest(BaseModel):
     document_name: str = Field(..., min_length=1, max_length=240)
     full_text: str = Field(..., max_length=500_000)
     classified_clauses: List[Dict[str, Any]] = Field(default_factory=list, max_length=1000)
+    user_party: str = Field(default="", max_length=160)
+    user_role: str = Field(default="neutral", max_length=40)
+
+
+class LoopholeAuditRequest(BaseModel):
+    document_name: str = Field(default="Contract Draft", max_length=240)
+    full_text: str = Field(..., min_length=20, max_length=500_000)
+    classified_clauses: List[Dict[str, Any]] = Field(default_factory=list, max_length=1000)
+    user_party: str = Field(default="", max_length=160)
+    user_role: str = Field(default="neutral", max_length=40)
+    mode: str = Field(default="full_audit", max_length=32)
+
+
+class ApplyHardeningRequest(BaseModel):
+    title: str = Field(default="Contract Draft", max_length=200)
+    draft_text: str = Field(..., min_length=50, max_length=100_000)
+    loopholes_to_fix: List[Dict[str, Any]] = Field(default_factory=list, max_length=30)
+    jurisdiction: str = Field(default="India (Indian Contract Act, 1872)", max_length=160)
+
+
+class ProtectiveRewriteRequest(BaseModel):
+    document_name: str = Field(default="Contract", max_length=240)
+    full_text: str = Field(..., min_length=30, max_length=500_000)
+    classified_clauses: List[Dict[str, Any]] = Field(default_factory=list, max_length=1000)
+    user_party: str = Field(default="", max_length=160)
+    user_role: str = Field(default="client_buyer", max_length=40)
+    aggressiveness: str = Field(default="maximum_user_only", max_length=40)
+    jurisdiction: str = Field(default="India (Indian Contract Act, 1872)", max_length=160)
+    custom_priorities: str = Field(default="", max_length=1500)
+
+
+class CaseStrategyRequest(BaseModel):
+    document_name: str = Field(default="Contract", max_length=240)
+    full_text: str = Field(default="", max_length=500_000)
+    classified_clauses: List[Dict[str, Any]] = Field(default_factory=list, max_length=1000)
+    represented_party: str = Field(default="", max_length=160)
+    user_role: str = Field(default="client_buyer", max_length=40)
+    posture: str = Field(default="claimant", max_length=32)
+    dispute_facts: str = Field(default="", max_length=3000)
+    jurisdiction: str = Field(default="India", max_length=160)
+
+
+class LegalNoticeRequest(BaseModel):
+    document_name: str = Field(default="Commercial Agreement", max_length=240)
+    parties: List[str] = Field(default_factory=list, max_length=8)
+    effective_date: str = Field(default="", max_length=80)
+    governing_law: str = Field(default="India", max_length=160)
+    represented_party: str = Field(default="", max_length=160)
+    counterparty_name: str = Field(default="", max_length=160)
+    dispute_facts: str = Field(default="", max_length=3000)
+    relief_sought: str = Field(default="", max_length=1000)
+    notice_type: str = Field(default="demand_and_cure", max_length=60)
+    breached_clauses_summary: str = Field(default="", max_length=2000)
+
+
+class NegotiationEmailRequest(BaseModel):
+    document_name: str = Field(default="Commercial Agreement", max_length=240)
+    represented_party: str = Field(default="", max_length=160)
+    counterparty_name: str = Field(default="", max_length=160)
+    tone: str = Field(default="collaborative", max_length=32)
+    deal_breakers: List[str] = Field(default_factory=list, max_length=10)
+    negotiation_priorities: List[str] = Field(default_factory=list, max_length=10)
+    accepted_redlines: List[Dict[str, str]] = Field(default_factory=list, max_length=12)
+    custom_note: str = Field(default="", max_length=800)
+
+
+class StandardizeBaselineRequest(BaseModel):
+    title: str = Field(default="Commercial Agreement", max_length=200)
+    draft_text: str = Field(..., min_length=50, max_length=100_000)
+    jurisdiction: str = Field(default="India (Indian Contract Act, 1872)", max_length=160)
+    contract_type: str = Field(default="msa", max_length=40)
+
+
+class BenchmarkBaselineRequest(BaseModel):
+    baseline_title: str = Field(..., min_length=1, max_length=200)
+    baseline_text: str = Field(..., min_length=30, max_length=150_000)
+    target_title: str = Field(..., min_length=1, max_length=200)
+    target_text: str = Field(..., min_length=30, max_length=150_000)
+
+
+class ExportDocxRequest(BaseModel):
+    title: str = Field(default="Contract Agreement", max_length=240)
+    full_text: str = Field(..., min_length=20, max_length=200_000)
+    subtitle: str = Field(default="", max_length=200)
+    jurisdiction: str = Field(default="", max_length=160)
+    document_kind: str = Field(default="contract", max_length=40)
+    counsel_notes: List[str] = Field(default_factory=list, max_length=20)
+    disclaimer: str = Field(default="", max_length=500)
 
 
 class CompareContractsRequest(BaseModel):
@@ -174,6 +267,9 @@ class DraftContractRequest(BaseModel):
     payment_terms: str = Field(default="", max_length=400)
     notice_period: str = Field(default="", max_length=120)
     special_instructions: str = Field(default="", max_length=1500)
+    stance: str = Field(default="balanced", max_length=40)
+    representing_party: str = Field(default="mutual", max_length=32)
+    template_details: Dict[str, str] = Field(default_factory=dict)
 
 
 class ReviseDraftRequest(BaseModel):
@@ -201,7 +297,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 async def root():
     return {
         "status": "AI Service is running",
-        "version": "2.1.0",
+        "version": "3.0.0",
         "endpoints": {
             "health": "/health", "live": "/health/live", "ready": "/health/ready",
             "extract_file": "/api/v1/extract", "extract_path": "/api/v1/extract-path",
@@ -211,8 +307,16 @@ async def root():
             "vector_stats": "/api/v1/vector/stats", "retrieve": "/api/v1/retrieve",
             "redline": "/api/v1/redline", "playbook_evaluate": "/api/v1/playbook/evaluate",
             "playbook_generate_rules": "/api/v1/playbook/generate-rules",
+            "negotiation_email": "/api/v1/negotiation/email",
             "draft": "/api/v1/draft", "draft_revise": "/api/v1/draft/revise",
-            "draft_clause": "/api/v1/draft-clause",
+            "draft_clause": "/api/v1/draft-clause", "draft_harden": "/api/v1/draft/harden",
+            "draft_standardize_baseline": "/api/v1/draft/standardize-baseline",
+            "baseline_benchmark": "/api/v1/baseline/benchmark",
+            "loopholes_audit": "/api/v1/loopholes/audit",
+            "rewrite_user_only": "/api/v1/contracts/rewrite-user-only",
+            "counsel_case_strategy": "/api/v1/counsel/case-strategy",
+            "counsel_legal_notice": "/api/v1/counsel/legal-notice",
+            "export_docx": "/api/v1/export/docx",
         },
     }
 
@@ -288,6 +392,8 @@ async def analyze_contract(payload: AnalyzeContractRequest):
         document_name=payload.document_name,
         full_text=payload.full_text,
         classified_clauses=payload.classified_clauses,
+        user_party=payload.user_party,
+        user_role=payload.user_role,
     )
 
 
@@ -381,6 +487,7 @@ async def retrieve_passages(payload: RetrieveRequest):
         use_reranker=payload.use_reranker,
         fallback_chunks=payload.fallback_chunks,
         conversation_history=payload.conversation_history,
+        qa_mode=payload.qa_mode,
     )
 
 
@@ -448,6 +555,9 @@ async def draft_contract(payload: DraftContractRequest):
         payment_terms=payload.payment_terms,
         notice_period=payload.notice_period,
         special_instructions=payload.special_instructions,
+        stance=payload.stance,
+        representing_party=payload.representing_party,
+        template_details=payload.template_details,
     )
 
 
@@ -458,6 +568,125 @@ async def revise_contract_draft(payload: ReviseDraftRequest):
         current_text=payload.current_text,
         instruction=payload.instruction,
         jurisdiction=payload.jurisdiction,
+    )
+
+
+@app.post("/api/v1/loopholes/audit", tags=["Loopholes & Hardening"], dependencies=AUTH)
+async def audit_loopholes(payload: LoopholeAuditRequest):
+    return loophole_service.audit_loopholes(
+        document_name=payload.document_name,
+        full_text=payload.full_text,
+        classified_clauses=payload.classified_clauses,
+        user_role=payload.user_role,
+        user_party=payload.user_party,
+        mode=payload.mode,
+    )
+
+
+@app.post("/api/v1/draft/harden", tags=["Loopholes & Hardening"], dependencies=AUTH)
+async def harden_initial_draft(payload: ApplyHardeningRequest):
+    return loophole_service.apply_hardening_resolutions(
+        title=payload.title,
+        draft_text=payload.draft_text,
+        loopholes_to_fix=payload.loopholes_to_fix,
+        jurisdiction=payload.jurisdiction,
+    )
+
+
+@app.post("/api/v1/draft/standardize-baseline", tags=["Baselines"], dependencies=AUTH)
+async def standardize_baseline(payload: StandardizeBaselineRequest):
+    return drafting_service.standardize_presentation_baseline(
+        title=payload.title,
+        draft_text=payload.draft_text,
+        jurisdiction=payload.jurisdiction,
+        contract_type=payload.contract_type,
+    )
+
+
+@app.post("/api/v1/baseline/benchmark", tags=["Baselines"], dependencies=AUTH)
+async def benchmark_baseline(payload: BenchmarkBaselineRequest):
+    return drafting_service.benchmark_against_baseline(
+        baseline_title=payload.baseline_title,
+        baseline_text=payload.baseline_text,
+        target_title=payload.target_title,
+        target_text=payload.target_text,
+    )
+
+
+@app.post("/api/v1/contracts/rewrite-user-only", tags=["Protective Rewrite"], dependencies=AUTH)
+async def rewrite_contract_for_user(payload: ProtectiveRewriteRequest):
+    return protective_rewrite_service.rewrite_for_user(
+        document_name=payload.document_name,
+        full_text=payload.full_text,
+        classified_clauses=payload.classified_clauses,
+        user_party=payload.user_party,
+        user_role=payload.user_role,
+        aggressiveness=payload.aggressiveness,
+        jurisdiction=payload.jurisdiction,
+        custom_priorities=payload.custom_priorities,
+    )
+
+
+@app.post("/api/v1/counsel/case-strategy", tags=["Counsel Strategy"], dependencies=AUTH)
+async def generate_case_strategy(payload: CaseStrategyRequest):
+    return case_strategy_service.build_case_strategy(
+        document_name=payload.document_name,
+        full_text=payload.full_text,
+        classified_clauses=payload.classified_clauses,
+        represented_party=payload.represented_party,
+        user_role=payload.user_role,
+        posture=payload.posture,
+        dispute_facts=payload.dispute_facts,
+        jurisdiction=payload.jurisdiction,
+    )
+
+
+@app.post("/api/v1/counsel/legal-notice", tags=["Counsel Strategy"], dependencies=AUTH)
+async def draft_legal_notice(payload: LegalNoticeRequest):
+    return case_strategy_service.draft_legal_notice(
+        document_name=payload.document_name,
+        parties=payload.parties,
+        effective_date=payload.effective_date,
+        governing_law=payload.governing_law,
+        represented_party=payload.represented_party,
+        counterparty_name=payload.counterparty_name,
+        dispute_facts=payload.dispute_facts,
+        relief_sought=payload.relief_sought,
+        notice_type=payload.notice_type,
+        breached_clauses_summary=payload.breached_clauses_summary,
+    )
+
+
+@app.post("/api/v1/negotiation/email", tags=["Playbook & Redline"], dependencies=AUTH)
+async def draft_negotiation_email(payload: NegotiationEmailRequest):
+    return playbook_service.generate_negotiation_email(
+        document_name=payload.document_name,
+        represented_party=payload.represented_party,
+        counterparty_name=payload.counterparty_name,
+        tone=payload.tone,
+        deal_breakers=payload.deal_breakers,
+        negotiation_priorities=payload.negotiation_priorities,
+        accepted_redlines=payload.accepted_redlines,
+        custom_note=payload.custom_note,
+    )
+
+
+@app.post("/api/v1/export/docx", tags=["Export"], dependencies=AUTH)
+async def export_docx(payload: ExportDocxRequest):
+    docx_bytes = build_legal_docx(
+        title=payload.title,
+        full_text=payload.full_text,
+        subtitle=payload.subtitle,
+        jurisdiction=payload.jurisdiction,
+        document_kind=payload.document_kind,
+        counsel_notes=payload.counsel_notes,
+        disclaimer=payload.disclaimer,
+    )
+    safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in (payload.title or "contract"))[:60].strip("_") or "contract"
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
     )
 
 

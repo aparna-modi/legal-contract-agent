@@ -58,15 +58,29 @@ INDIAN_LAW_MAP: Dict[str, str] = {
     "Intellectual Property": "Copyright Act, 1957 — Sec. 17 (First Ownership of Copyright) & Sec. 19 (Mode of Assignment); Patents Act, 1970",
     "Non-Compete & Restrictive Covenants": "Indian Contract Act, 1872 — Sec. 27 (Agreements in Restraint of Trade are generally void post-termination)",
     "Confidentiality & Non-Disclosure": "Indian Contract Act, 1872 — Sec. 73; Information Technology Act, 2000 — Sec. 72A; Digital Personal Data Protection Act, 2023",
-    "Payment Terms & Consideration": "Indian Contract Act, 1872 — Sec. 2(d) & Sec. 25 (Lawful Consideration), Sec. 55 (Time as Essence of Contract); Negotiable Instruments Act, 1881",
+    "Payment Terms & Consideration": "Indian Contract Act, 1872 — Sec. 2(d) & Sec. 25 (Lawful Consideration), Sec. 55 (Time as Essence of Contract); Negotiable Instruments Act, 1881 — Sec. 138",
     "Governing Law & Jurisdiction": "Code of Civil Procedure, 1908 — Sec. 20 (Territorial Jurisdiction) & Indian Contract Act, 1872 — Sec. 28 (Choice of Exclusive Forum)",
-    "Dispute Resolution & Arbitration": "Arbitration and Conciliation Act, 1996 — Sec. 7 (Arbitration Agreement), Sec. 8 & Sec. 11 (Appointment of Arbitrator)",
+    "Dispute Resolution & Arbitration": "Arbitration and Conciliation Act, 1996 — Sec. 7 (Arbitration Agreement), Sec. 9 (Interim Relief), Sec. 11 & Sec. 21",
     "Renewal & Auto-Renewal": "Indian Contract Act, 1872 — Sec. 10 (Free Consent) & Sec. 62 (Novation/Alteration of Contract)",
     "Representations, Warranties & Covenants": "Indian Contract Act, 1872 — Sec. 17–19 (Fraud/Misrepresentation); Transfer of Property Act, 1882 — Sec. 55 (Seller's Title Disclosure)",
     "Force Majeure": "Indian Contract Act, 1872 — Sec. 32 (Contingent Contracts) & Sec. 56 (Doctrine of Frustration / Impossibility)",
     "Property Schedule & Conveyance": "Transfer of Property Act, 1882 — Sec. 54 & 55 (Sale of Immovable Property); Registration Act, 1908 — Sec. 17; RERA, 2016",
-    "Parties & Preamble": "Indian Contract Act, 1872 — Sec. 10 & Sec. 11 (Competency of Parties & Valid Contract Formation)",
+    "Parties & Preamble": "Indian Contract Act, 1872 — Sec. 10 & Sec. 11 (Competency of Parties & Valid Contract Formation); Indian Stamp Act, 1899 — Sec. 35",
     "General Provision": "Indian Contract Act, 1872 — Sec. 10 (General Enforceability of Agreements)",
+}
+
+# Dual-mapped IPC (1860) <-> Bharatiya Nyaya Sanhita (BNS, 2023) & criminal/quasi-criminal remedies
+# applicable when contractual conduct crosses from civil breach into dishonest inducement, misappropriation,
+# forgery, cyber-theft, or dishonoured instruments.
+IPC_BNS_MAP: Dict[str, str] = {
+    "Payment Terms & Consideration": "IPC Sec. 415/420 <-> BNS Sec. 318 (Cheating on dishonest advance retention); IPC Sec. 405/406 <-> BNS Sec. 316 (Criminal Breach of Trust on entrusted funds); NI Act, 1881 Sec. 138 (Cheque Dishonour)",
+    "Confidentiality & Non-Disclosure": "IT Act, 2000 Sec. 43, 66 & 72A (Unauthorized Data/Trade Secret Disclosure); IPC Sec. 405/406 <-> BNS Sec. 316 (Criminal Breach of Trust over confidential records)",
+    "Intellectual Property": "Copyright Act, 1957 Sec. 63 (Criminal Copyright Infringement); IT Act, 2000 Sec. 66 (Source Code Theft); IPC Sec. 406 <-> BNS Sec. 316",
+    "Representations, Warranties & Covenants": "IPC Sec. 415/420 <-> BNS Sec. 318 (Fraudulent Inducement / Concealment of Title); IPC Sec. 463/468/471 <-> BNS Sec. 336/340 (Forged Title/Documents)",
+    "Property Schedule & Conveyance": "IPC Sec. 420 <-> BNS Sec. 318 (Fraudulent Sale / Double Alienation); IPC Sec. 406 <-> BNS Sec. 316 (Misappropriation of Earnest Money); RERA, 2016 Sec. 18 & 61",
+    "Termination": "IPC Sec. 406 <-> BNS Sec. 316 (Wrongful Retention of Deposit/Assets Post-Termination); Specific Relief Act, 1963 Sec. 10 & 38 (Injunction / Specific Performance)",
+    "Indemnity & Defense": "CPC, 1908 Order 37 (Summary Recovery on Liquidated Indemnity); IPC Sec. 420 <-> BNS Sec. 318 (Where loss stems from deliberate fraud)",
+    "Dispute Resolution & Arbitration": "Arbitration & Conciliation Act, 1996 Sec. 9 (Urgent Court Interim Relief) & Sec. 17; Commercial Courts Act, 2015 Sec. 12A (Pre-Institution Mediation)",
 }
 
 NON_CLAUSE_PATTERNS = [
@@ -150,26 +164,56 @@ def get_indian_law_reference(clause_type: str, text: str = "") -> str:
     return base
 
 
+def get_ipc_bns_reference(clause_type: str, text: str = "") -> str:
+    """Return applicable IPC (1860) <-> BNS (2023) and procedural litigation hooks when relevant."""
+    lower = (text or "").lower()
+    refs: List[str] = []
+    base = IPC_BNS_MAP.get(clause_type, "")
+    if base:
+        refs.append(base)
+    if any(k in lower for k in ("fraud", "misrepresent", "false statement", "conceal", "deceit", "encumbrance")):
+        refs.append("IPC Sec. 415/420 <-> BNS Sec. 318 (Cheating & Fraudulent Inducement)")
+    if any(k in lower for k in ("forfeit", "deposit", "advance", "escrow", "trust", "entrust")):
+        refs.append("IPC Sec. 405/406 <-> BNS Sec. 316 (Criminal Breach of Trust)")
+    if any(k in lower for k in ("cheque", "post-dated", "dishonour", "negotiable instrument")):
+        refs.append("Negotiable Instruments Act, 1881 — Sec. 138 & 141 (Cheque Dishonour)")
+    if any(k in lower for k in ("forg", "tamper", "counterfeit", "fabricated")):
+        refs.append("IPC Sec. 463/468/471 <-> BNS Sec. 336/340 (Forgery & False Document)")
+    if any(k in lower for k in ("source code", "data breach", "personal data", "unauthorized access", "cyber")):
+        refs.append("IT Act, 2000 — Sec. 43, 66 & 72A; DPDP Act, 2023")
+    if any(k in lower for k in ("threat", "coerc", "intimidat")):
+        refs.append("IPC Sec. 503/506 <-> BNS Sec. 351 (Criminal Intimidation)")
+
+    dedup: List[str] = []
+    seen: set[str] = set()
+    for item in refs:
+        key = item.split("(")[0].strip().lower()
+        if key not in seen:
+            seen.add(key)
+            dedup.append(item)
+    return "; ".join(dedup[:2])
+
+
 def build_plain_english_fallback(clause_type: str, text: str, risk_reason: str = "") -> str:
-    """Create a concise human-readable fallback explanation when offline."""
+    """Create a concise counsel-grade practical interpretation when running offline."""
     clean = re.sub(r"\s+", " ", (text or "").strip())
     first_sent = re.split(r"(?<=[.!?])\s+", clean)[0][:220]
     summaries = {
-        "Parties & Preamble": f"Identifies the contracting parties and their legal capacity to sign this agreement. Specifically: {first_sent}",
-        "Termination": f"Explains how and when either party can cancel or exit the agreement, and what happens on default. {risk_reason}",
-        "Payment Terms & Consideration": f"Sets out the payment amounts, milestones, taxes/charges, and deadlines both sides must follow. Specifically: {first_sent}",
-        "Limitation of Liability": f"Controls the maximum financial exposure if something goes wrong under this contract. {risk_reason}",
-        "Indemnity & Defense": f"Defines who pays for legal claims, third-party losses, or damages caused by a breach. {risk_reason}",
-        "Non-Compete & Restrictive Covenants": "Restricts competing business or solicitation activities. Under Indian law (Sec. 27, Indian Contract Act), post-termination non-competes are generally unenforceable.",
-        "Confidentiality & Non-Disclosure": "Requires keeping sensitive information private and outlines how confidential data must be protected.",
-        "Governing Law & Jurisdiction": f"Specifies which laws govern the agreement and which courts have authority to hear disputes. Specifically: {first_sent}",
-        "Dispute Resolution & Arbitration": "Describes how disagreements will be settled (such as amicable negotiation or arbitration) before going to court.",
-        "Property Schedule & Conveyance": "Describes the exact property details, possession handover timeline, utility transfers, and conveyance terms.",
-        "Representations, Warranties & Covenants": "Lists binding legal assurances regarding valid title, due diligence, encumbrances, and compliance.",
-        "Force Majeure": "Excuses delays or non-performance caused by extraordinary events outside either party's control.",
-        "Intellectual Property": "Clarifies who owns deliverables, pre-existing work, and intellectual property rights created under the agreement.",
+        "Parties & Preamble": f"Establishes the legal identities, capacity, and execution anchor of the contracting parties. Key excerpt: {first_sent}",
+        "Termination": f"Governs exit rights, default triggers, notice mechanics, and post-termination settlement obligations. {risk_reason}",
+        "Payment Terms & Consideration": f"Fixes commercial consideration, invoicing milestones, tax/duty allocation, and default payment remedies. Key excerpt: {first_sent}",
+        "Limitation of Liability": f"Allocates maximum financial exposure, liability caps, and consequential damage exclusions across the agreement. {risk_reason}",
+        "Indemnity & Defense": f"Allocates defense control and reimbursement liability for third-party claims, breaches, and statutory losses. {risk_reason}",
+        "Non-Compete & Restrictive Covenants": "Imposes post-contractual competitive restraints; under Section 27 of the Indian Contract Act, 1872, post-termination non-competes are generally void unless tied to goodwill sale.",
+        "Confidentiality & Non-Disclosure": "Establishes confidentiality boundaries, permitted disclosures, survival duration, and proprietary data safeguards.",
+        "Governing Law & Jurisdiction": f"Designates substantive governing law and exclusive territorial court venue for formal proceedings. Key excerpt: {first_sent}",
+        "Dispute Resolution & Arbitration": "Sets out pre-litigation escalation, arbitration seat, tribunal composition, and binding enforcement procedure.",
+        "Property Schedule & Conveyance": "Defines property boundaries, area specifications, title conveyance conditions, utility transfers, and handover timelines.",
+        "Representations, Warranties & Covenants": "Creates enforceable legal assurances on authority, marketable title, encumbrances, and statutory compliance.",
+        "Force Majeure": "Defines extraordinary excusing events, notice prerequisites, and suspension or termination thresholds during prolonged disruption.",
+        "Intellectual Property": "Separates pre-existing Background IP from foreground deliverables and specifies conditions governing IP transfer or licensing.",
     }
-    return summaries.get(clause_type, f"Sets out binding contractual duties under {clause_type}: {first_sent}").strip()
+    return summaries.get(clause_type, f"Establishes binding contractual obligations under {clause_type}: {first_sent}").strip()
 
 
 def is_substantive_clause(text: str) -> bool:
@@ -234,13 +278,36 @@ def assess_clause_risk(text: str, clause_type: str) -> Tuple[str, str]:
     return "low", "Routine commercial provision with standard rights and obligations."
 
 
-def detect_missing_clauses(classified_clauses: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+_CORE_PRESENCE_SIGNALS: Dict[str, re.Pattern] = {
+    "Termination": re.compile(r"\b(?:may terminate|termination for|right to terminate|termination notice|cure period)\b", re.I),
+    "Limitation of Liability": re.compile(r"\b(?:limitation of liability|aggregate liability|liability cap|consequential damages|shall not exceed)\b", re.I),
+    "Payment Terms & Consideration": re.compile(r"\b(?:commercial fee schedule|payment terms|purchase consideration|sale consideration|invoices? (?:shall be |are )?payable|net\s+\d+|milestone payment|subscription fees?)\b", re.I),
+    "Confidentiality & Non-Disclosure": re.compile(r"\b(?:confidential information|non[- ]disclosure|strict confidence|proprietary information)\b", re.I),
+    "Governing Law & Jurisdiction": re.compile(r"\b(?:governed by(?: and construed in accordance with)? the laws of|exclusive jurisdiction|governing law)\b", re.I),
+    "Dispute Resolution & Arbitration": re.compile(r"\b(?:arbitration|arbitral tribunal|sole arbitrator|conciliation act|dispute resolution|mediation)\b", re.I),
+    "Force Majeure": re.compile(r"\b(?:force majeure|acts? of god|beyond (?:its |a party's |the )?reasonable control)\b", re.I),
+}
+
+
+def detect_missing_clauses(
+    classified_clauses: List[Dict[str, Any]],
+    full_text: str = "",
+) -> List[Dict[str, str]]:
     present_types = {str(c.get("clause_type", "")).strip() for c in classified_clauses}
-    return [
-        {"clause_type": ct, "severity": sev, "reason": reason}
-        for ct, sev, reason in EXPECTED_CORE_CLAUSES
-        if ct not in present_types
-    ]
+    # Combine substantive clause texts (and optional full_text) so clauses merged under a parent
+    # section heading (e.g., Arbitration inside Governing Law, or Fees in Schedule A) are not falsely flagged missing.
+    clause_blob = "\n".join(str(c.get("text") or "") for c in classified_clauses)
+    combined_blob = f"{clause_blob}\n{full_text or ''}" if full_text else clause_blob
+
+    missing: List[Dict[str, str]] = []
+    for ct, sev, reason in EXPECTED_CORE_CLAUSES:
+        if ct in present_types:
+            continue
+        sig = _CORE_PRESENCE_SIGNALS.get(ct)
+        if sig and combined_blob and sig.search(combined_blob):
+            continue
+        missing.append({"clause_type": ct, "severity": sev, "reason": reason})
+    return missing
 
 
 def summarize_risk_profile(
@@ -281,6 +348,7 @@ class ClauseClassifierService:
                 "risk_reason": risk_reason,
                 "plain_english": build_plain_english_fallback(category, text, risk_reason),
                 "indian_law_ref": get_indian_law_reference(category, text),
+                "ipc_bns_ref": get_ipc_bns_reference(category, text),
             })
         return clauses
 

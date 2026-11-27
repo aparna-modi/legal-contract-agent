@@ -8,7 +8,7 @@ import ContractDrawer from "../components/ContractDrawer";
 import LibrarySearchModal from "../components/LibrarySearchModal";
 import {
   ArrowRightIcon, CompareIcon, FileTextIcon, MessageIcon, PenToolIcon, PlusIcon,
-  RefreshIcon, ScaleIcon, SearchIcon, ShieldAlertIcon, ShieldCheckIcon, TrashIcon, XIcon,
+  RefreshIcon, ScaleIcon, SearchIcon, ShieldAlertIcon, TrashIcon, XIcon,
 } from "../components/Icons";
 import { AnimatedNumber, FadePanel, PageReveal, StaggerContainer, StaggerItem } from "../components/Motion";
 import { SPRING_SNAPPY } from "../components/motionTokens";
@@ -24,18 +24,18 @@ const QUICK_QUERIES = [
 const LANDING_CAPABILITIES = [
   {
     icon: ShieldAlertIcon,
-    title: "Clause & Risk Review",
-    body: "Breaks down each clause in plain English, flags unfair terms, lists important deadlines, and highlights missing protections.",
+    title: "Clause, Loophole & Risk Audit",
+    body: "Scores every contract across five legal axes, uncovers hidden loopholes and missing protections, and maps exposure under Indian civil and penal statutes.",
   },
   {
     icon: MessageIcon,
-    title: "Answers Backed by the Text",
-    body: "Ask follow-up questions about any contract and jump straight to the exact page—never guessing when a detail isn't there.",
+    title: "Page-Cited Q&A & Counsel Strategy",
+    body: "Interrogate any agreement with exact page citations, dual IPC/BNS remedy analysis, and evidence checklists built for dispute readiness.",
   },
   {
     icon: CompareIcon,
-    title: "Drafting, Redlines & Playbooks",
-    body: "Start from 7 ready templates, compare two versions word by word, and check agreements against your own review rules.",
+    title: "Senior Drafting, Baselines & Redlines",
+    body: "Draft from 12 commercial templates, harden initial drafts without altering deal terms, rewrite agreements exclusively for your side, and export .docx files.",
   },
 ];
 
@@ -300,11 +300,11 @@ export default function Dashboard() {
       <PageReveal className="landing-page">
         <section className="hero-editorial">
           <div className="hero-content">
-            <span className="hero-eyebrow">Contract Review Made Clear</span>
-            <h1 className="hero-title">Know what you&apos;re signing—every obligation, deadline, and risk.</h1>
+            <span className="hero-eyebrow">Commercial Contract &amp; Litigation Suite</span>
+            <h1 className="hero-title">Audit every clause, close every loophole, and sign on your terms.</h1>
             <p className="hero-subtitle">
-              Upload job offers, leases, vendor contracts, or NDAs—or draft a clean agreement from scratch.
-              Read clauses in plain English, compare edits side by side, and get answers tied directly to the page.
+              Upload vendor agreements, leases, employment offers, or NDAs—or draft execution-ready contracts from scratch.
+              Rewrite terms strictly to protect your side, audit drafting vulnerabilities, compare revisions word by word, and verify every answer against exact page citations.
             </p>
             <div className="hero-actions">
               <Link to="/register" className="btn btn-primary btn-lg">
@@ -349,7 +349,7 @@ export default function Dashboard() {
           <button type="button" className="btn btn-secondary" onClick={loadWorkspace} disabled={loading}>
             <RefreshIcon size={15} /> Refresh
           </button>
-          <Link to="/draft" className="btn btn-secondary"><PenToolIcon size={15} /> Draft</Link>
+          <Link to="/draft" className="btn btn-secondary"><PenToolIcon size={15} /> Drafting</Link>
           {metrics.analyzed >= 2 && (
             <Link to="/compare" className="btn btn-secondary"><CompareIcon size={15} /> Compare</Link>
           )}
@@ -583,6 +583,11 @@ export default function Dashboard() {
                           <div className="risk-cell-stack">
                             <div className="risk-cell">
                               <span className={`risk-pill risk-${r.overallLevel || "low"}`}>{(r.overallLevel || "low").toUpperCase()}</span>
+                              {doc.scorecard?.grade && (
+                                <span className="badge-grade" title={`Contract Health: ${doc.scorecard.overallHealth ?? 0}/100`}>
+                                  Grade {doc.scorecard.grade}
+                                </span>
+                              )}
                               <span className="mono-caption">{r.high || 0}H / {r.medium || 0}M / {r.low || 0}L</span>
                             </div>
                             <div className="mini-score-track">
@@ -619,10 +624,10 @@ export default function Dashboard() {
                               <button
                                 type="button"
                                 className="btn btn-secondary btn-sm"
-                                onClick={() => { setActiveContract(doc); setDrawerTab("playbook"); }}
-                                title="Run Playbook Compliance Audit"
+                                onClick={() => { setActiveContract(doc); setDrawerTab("loopholes"); }}
+                                title="Inspect Drafting Loopholes & Resolutions"
                               >
-                                <ShieldCheckIcon size={14} /> Audit
+                                <ShieldAlertIcon size={14} /> Loopholes
                               </button>
                               <button
                                 type="button"

@@ -2,30 +2,34 @@
 
 Reading through a long agreement page by page is slow, and it is easy to miss a buried auto-renewal date, an uncapped liability clause, or a strict penalty buried on page 19. **Legal Contract Agent** helps individuals, founders, and legal teams review contracts faster without losing track of what the document actually says.
 
-Upload a `.pdf` (including scanned copies), `.docx`, or `.txt` file. The app breaks it down into individual clauses, explains them in plain English, highlights risks and missing protections, lists key dates and obligations, compares two versions side by side, and answers questions with direct links to the exact page and section.
+Upload a `.pdf` (including scanned copies via OCR), `.docx`, or `.txt` file. The workspace extracts every clause with exact page citations, audits drafting loopholes and statutory exposure, scores contract health across five legal axes, rewrites agreements exclusively to protect your side, compares revisions word by word, and supports courtroom strategy under Indian civil and penal law.
 
-> **Note:** This app is meant to help with first-pass contract review and organization. It is **not legal advice** and does not replace a qualified lawyer.
+> **Counsel Notice:** Built to accelerate contract review, drafting, and litigation preparation. Obtain independent review from qualified legal counsel prior to execution or filing.
 
 For technical architecture details, see [ARCHITECTURE.md](./ARCHITECTURE.md). For launch checks, see [PRE_DEPLOYMENT_CHECKLIST.md](./PRE_DEPLOYMENT_CHECKLIST.md).
 
 ---
 
-## What You Can Do With It
+## Core Capabilities
 
-- **Contract Workspace & Side-by-Side Inspector**  
-  Keep all your agreements in one searchable workspace with light and dark themes. Open any analyzed contract in a 5-tab panel (**Overview**, **Clauses & Risks**, **Document**, **Ask Contract**, and **Playbook**) to inspect summaries, jump straight to cited pages, and export clean PDF or Markdown reports.
-- **Plain-English Clause Breakdown & Risk Highlights**  
-  Every clause is categorized, scored (`Low`, `Medium`, `High`), and explained in everyday language—alongside relevant Indian statutory references where applicable, a table of deadlines/obligations, and a list of missing standard protections you can draft in one click.
-- **Ask Questions About Your Contract (and Search Everything with `Ctrl+K`)**  
-  Ask follow-up questions about payment terms, notice periods, deposits, or exit clauses. Every answer quotes the source passage and links directly to the page. If a contract doesn't mention what you asked about, the app says so clearly instead of guessing.
-- **Draft Agreements from Scratch (`/draft`)**  
-  Start from 7 built-in templates (**MSA**, **Mutual NDA**, **SaaS**, **DPA**, **Employment**, **Independent Contractor**, and **Commercial Lease**), request edits in plain English, fill bracketed blanks inline, print to PDF or download `.md`, and save straight to your workspace.
-- **Compare Two Versions (`/compare`)**  
-  Pick any two analyzed agreements to see word-by-word additions and deletions, how overall risk shifted between drafts, and suggested balanced counter-wording for risky changes.
-- **Custom Review Playbooks (`/playbook`)**  
-  Load a jurisdiction starter pack (India Commercial, US Commercial/SaaS, UK & EU GDPR, Freelancer/Contractor) or paste your own review rules in plain English, then audit contracts against them.
+- **Contract Workspace & Multi-Tab Counsel Inspector**  
+  Manage agreements in a searchable workspace with light and dark editorial themes. Open any analyzed agreement to inspect executive briefings, 5-axis legal health scorecards, clause risk tiers, loopholes, protective rewrites, IPC/BNS litigation strategy, playbooks, page-cited Q&A, and the source document side by side.
+- **Loophole Audit, Corrective Measures & 5-Axis Scorecard**  
+  Detects undefined capitalized terms, unassigned commercial placeholders, unilateral escape hatches, toothless obligations, broken cross-references, and statutory traps (including ICA Sec. 27 restraints), with ready-to-insert corrective clauses and a projected health score.
+- **Exclusive User-Side Protective Rewriter ("Protect My Side")**  
+  Select the party and commercial role you represent to redraft the entire agreement strictly in your favor—neutralizing adverse clauses and inserting role-specific safeguards while preserving enforceability—then save and compare against the original draft.
+- **Counsel Litigation Strategy & IPC (1860) ↔ BNS (2023) Linkage**  
+  Maps contract breaches to Indian civil/commercial remedies (ICA 1872, SRA 1963, CPC Order 37/39, Arbitration Act Sec. 9/11/21, Commercial Courts Act Sec. 12A) alongside dual IPC/BNS penal tracks, courtroom winning arguments, BSA 2023 Sec. 63 evidence checklists, and a formal Indian Legal Notice generator.
+- **Page-Cited Q&A & Library Search (`Ctrl+K`)**  
+  Ask factual or strategic questions across a single contract or your entire library. Every finding quotes the source clause and links directly to the page, declining cleanly when the text does not support an answer.
+- **Senior Drafting Studio, Initial-Draft Hardening (4a) & Firm Baselines (4b) (`/draft`)**  
+  Draft from 12 commercial templates (`MSA`, `Mutual NDA`, `SaaS`, `DPA`, `Employment`, `Contractor`, `Commercial Lease`, `Property Sale`, `Founders`, `Software Dev`, `Partnership`, `Settlement`) with `Protect User Only`, `User-Favorable`, or `Balanced` postures; harden rough drafts surgically without altering deal terms; standardize to a 10-point law-firm presentation baseline; benchmark contracts against saved firm baselines; maintain an Approved Clause Bank; and export formatted Word (`.docx`), Markdown (`.md`), PDF, and Calendar (`.ics`) files.
+- **Revision & Firm Baseline Comparison (`/compare`)**  
+  Compare two contract revisions word by word with risk-shift metrics and counter-redlines, or benchmark any uploaded contract directly against curated and custom firm baselines.
+- **Legal Playbooks & Compliance (`/playbook`)**  
+  Apply jurisdictional starter packs (including India Litigation-Ready, India Commercial, US SaaS, UK/EU GDPR, and Contractor) or compile custom policy prose into structured compliance checks.
 - **Team Sharing, Account Security & Admin Console**  
-  Open to both personal users and teams (no corporate email required). Manage your profile, password, active devices, and optional team roles (`Admin`, `Counsel`, `Reviewer`). Admins also get a dedicated console with live service health checks and a paginated cross-account audit log.
+  Supports both individual practitioners and legal teams with role-based access (`Admin`, `Counsel`, `Reviewer`), session management, live service telemetry, and a paginated cross-account audit log.
 
 ---
 
@@ -36,7 +40,7 @@ For technical architecture details, see [ARCHITECTURE.md](./ARCHITECTURE.md). Fo
 | Frontend | React 19, Vite 8, React Router v7, Framer Motion |
 | Backend API | Node.js 20, Express 5, Mongoose 9 (MongoDB + GridFS / S3), Helmet, Redis (optional) |
 | AI Service | Python 3.13, FastAPI, Google Gemini (`google-genai`), Qdrant / ChromaDB, `pypdf`, `python-docx` |
-| Hosting | Render (`render.yaml`), Vercel (`frontend/vercel.json`), Docker Compose |
+| Hosting | Render (`render.yaml`), Vultr VPS (`docker-compose.vultr.yml` + Caddy HTTPS), Docker Compose |
 
 ---
 
@@ -168,8 +172,15 @@ npm run test:ai
    - Publish directory: `dist`
    - Environment variable: `VITE_API_URL=https://<your-backend-service>.onrender.com`
 
+### Vultr Production VPS (Docker Compose + Caddy HTTPS + 24/7 Keep-Alive)
+1. Copy `.env.vultr.example` to `.env.vultr` and populate your domain, MongoDB, Gemini, and internal keys.
+2. Launch the full stack (2 load-balanced backend replicas, AI service, Qdrant, Redis, Caddy automatic TLS, and the 4-minute `keepalive` watchdog):
+   ```bash
+   docker compose -f docker-compose.vultr.yml --env-file .env.vultr up -d --build
+   ```
+
 ### Common Deployment Notes
-- **First load feels slow on Render free tier**: Free services sleep after 15 minutes of inactivity and take ~30–50 seconds to wake up. The backend automatically retries transient `502`/`503`/`504` errors and recovers its health status once the AI worker responds.
+- **Always-Active Keep-Alive**: On Render free tier, the backend's 4-minute self-pulse (`ENABLE_KEEP_ALIVE=true`, `KEEP_ALIVE_INTERVAL_MS=240000`) plus `.github/workflows/keep-alive.yml` (every 5 minutes) keep Frontend, Backend, and AI Service warm continuously. On Vultr, the dedicated `lca-keepalive` container monitors all services locally 24/7.
 - **Session refresh returns `401` across domains**: Make sure `NODE_ENV=production` and `COOKIE_SAMESITE=none` are set on the backend, and `CORS_ORIGINS` matches your exact HTTPS frontend URL without a trailing slash.
 
 ---
